@@ -7,6 +7,7 @@ __pycache__
 /SwinIR/*
 /repositories
 /venv
+/.venv
 /tmp
 /model.ckpt
 /models/**/*
@@ -42,3 +43,4 @@ notification.mp3
 /cache
 trace.json
 /sysinfo-????-??-??-??-??.json
+.env

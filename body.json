@@ -1,0 +1,11 @@
+{
+    "input": {
+        "path": "sam/sam-predict",
+        "params": {
+            "input_image": "https://img.freepik.com/free-photo/surprised-happy-girl-pointing-left-recommend-product-advertisement-make-okay-gesture_176420-20191.jpg?t=st=1746166978~exp=1746170578~hmac=285748f9138454c5e28265db54f4f4778a93b51ce9d771441e0ed92fe8eed50a&w=1380",
+            "dino_enabled": true,
+            "dino_text_prompt": "clothes",
+            "dino_preview_checkbox": false
+        }
+    }
+}
