@@ -22,11 +22,38 @@ for module in runpod boto3 requests PIL; do
     fi
 done
 
+# Проверка наличия curl
+if ! command -v curl &> /dev/null; then
+    echo "curl not found, installing..."
+    apt-get update && apt-get install -y curl
+fi
+
+# Проверка наличия моделей SAM
+echo "===== Checking SAM models ====="
+SAM_DIR="models/sam"
+mkdir -p "$SAM_DIR"
+
+# Загрузка модели SAM, если она отсутствует
+SAM_MODEL="$SAM_DIR/sam_vit_h_4b8939.pth"
+if [ ! -f "$SAM_MODEL" ]; then
+    echo "Downloading SAM model to $SAM_MODEL..."
+    curl -L "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth" -o "$SAM_MODEL"
+    if [ $? -eq 0 ]; then
+        echo "SAM model downloaded successfully!"
+    else
+        echo "ERROR: Failed to download SAM model!"
+        exit 1
+    fi
+else
+    echo "SAM model already exists at $SAM_MODEL"
+fi
+
 # Проверка наличия SD WebUI
 if [ ! -f "launch.py" ]; then
     echo "ERROR: launch.py not found in $(pwd)!"
     echo "Files in current directory:"
     ls -la
+    exit 1
 fi
 
 # Проверка наличия нашего handler
@@ -34,6 +61,7 @@ if [ ! -f "function_handler.py" ]; then
     echo "ERROR: function_handler.py not found in $(pwd)!"
     echo "Files in current directory:"
     ls -la
+    exit 1
 fi
 
 # Проверка переменных окружения для S3
@@ -69,9 +97,28 @@ trap cleanup SIGINT SIGTERM EXIT
 
 # Запуск приложений
 echo "===== Starting applications ====="
-echo "1. Launching WebUI in background with arguments: --api --listen 0.0.0.0 --port 7860"
-python launch.py --api --listen 0.0.0.0 --port 7860 &
+echo "1. Launching WebUI in background with arguments: --api --listen --port 7860"
+python launch.py --api --listen --port 7860 &
 WEBUI_PID=$!
+
+# Wait until WebUI is available
+echo "Waiting for WebUI to start..."
+MAX_ATTEMPTS=100  # ~8 минут (100 * 5 секунд)
+ATTEMPT=0
+
+until curl -s --head --fail http://127.0.0.1:7860/; do
+    ATTEMPT=$((ATTEMPT+1))
+    if [ $ATTEMPT -ge $MAX_ATTEMPTS ]; then
+        echo "ERROR: Timed out waiting for WebUI to start after 5 minutes!"
+        echo "WebUI log (last 50 lines):"
+        tail -n 50 /tmp/webui.log 2>/dev/null || echo "No log file found."
+        exit 1
+    fi
+    echo "WebUI not ready yet (attempt $ATTEMPT of $MAX_ATTEMPTS). Sleeping for 5 seconds..."
+    sleep 5
+done
+
+echo "WebUI is up and running!"
 
 echo "2. Launching RunPod handler..."
 python function_handler.py &

@@ -9,3 +9,15 @@
         }
     }
 }
+{
+    "input": {
+      "path": "sdapi/v1/txt2img",
+      "params": {
+        "prompt": "a beautiful landscape, high resolution",
+        "width": 512,
+        "height": 512,
+        "num_inference_steps": 30,
+        "guidance_scale": 7.5
+      }
+    }
+  }
