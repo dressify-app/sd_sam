@@ -42,7 +42,7 @@ RUN mkdir -p extensions/segment-anything/models/grounding-dino \
 RUN mkdir -p repositories \
     && git clone --depth 1 https://github.com/AUTOMATIC1111/stable-diffusion-webui-assets.git repositories/stable-diffusion-webui-assets \
     && git clone --depth 1 https://github.com/Stability-AI/stablediffusion.git repositories/stable-diffusion-stability-ai \
-    && git clone --depth 1 https://github.com/Stability-AI/generative-models.git repositories/generative-models \
+    && git clone https://github.com/Stability-AI/generative-models.git repositories/generative-models \
     && git clone --depth 1 https://github.com/crowsonkb/k-diffusion.git repositories/k-diffusion \
     && git clone --depth 1 https://github.com/salesforce/BLIP.git repositories/BLIP
 
