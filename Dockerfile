@@ -2,6 +2,7 @@
 FROM pytorch/pytorch:2.0.1-cuda11.7-cudnn8-runtime
 
 ENV DEBIAN_FRONTEND=noninteractive
+RUN ln -snf /usr/share/zoneinfo/$CONTAINER_TIMEZONE /etc/localtime && echo $CONTAINER_TIMEZONE > /etc/timezone
 
 # Установка необходимых системных зависимостей (оптимизировано)
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -46,7 +47,7 @@ RUN mkdir -p models/sam \
 # Устанавливаем зависимости для SAM и WebUI
 RUN pip install --no-cache-dir segment-anything pillow torchvision
 RUN pip install --no-cache-dir runpod boto3 requests
-RUN pip install --no-cache-dir git+https://github.com/IDEA-Research/GroundingDINO.git@main
+RUN pip install --no-cache-dir --force-reinstall --no-build-isolation git+https://github.com/IDEA-Research/GroundingDINO.git@main
 
 # Устанавливаем xformers с поддержкой CUDA
 RUN pip install --no-cache-dir xformers==0.0.22 triton
