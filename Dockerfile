@@ -27,7 +27,7 @@ WORKDIR /app
 RUN git config --global core.compression 9
 
 # Клонирование репозитория WebUI с оптимизированными параметрами
-RUN git clone --depth 1 https://github.com/AUTOMATIC1111/stable-diffusion-webui.git .
+RUN git clone https://github.com/AUTOMATIC1111/stable-diffusion-webui.git .
 
 # Клонируем плагин Segment-Anything
 RUN git clone --depth 1 https://github.com/continue-revolution/sd-webui-segment-anything.git extensions/segment-anything && \
@@ -43,7 +43,7 @@ RUN mkdir -p repositories \
     && git clone --depth 1 https://github.com/AUTOMATIC1111/stable-diffusion-webui-assets.git repositories/stable-diffusion-webui-assets \
     && git clone --depth 1 https://github.com/Stability-AI/stablediffusion.git repositories/stable-diffusion-stability-ai \
     && git clone https://github.com/Stability-AI/generative-models.git repositories/generative-models \
-    && git clone --depth 1 https://github.com/crowsonkb/k-diffusion.git repositories/k-diffusion \
+    && git clone https://github.com/crowsonkb/k-diffusion.git repositories/k-diffusion \
     && git clone --depth 1 https://github.com/salesforce/BLIP.git repositories/BLIP
 
 # Предварительная загрузка модели SAM для избежания повторных загрузок
