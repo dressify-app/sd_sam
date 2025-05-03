@@ -25,6 +25,9 @@ WORKDIR /app
 # Клонирование репозитория WebUI
 RUN git clone https://github.com/AUTOMATIC1111/stable-diffusion-webui.git .
 
+# Предустановка основных Python-зависимостей WebUI для пропуска требований при старте
+RUN pip install --no-cache-dir clip open_clip k_diffusion
+
 # Клонируем плагин Segment-Anything
 RUN git clone https://github.com/continue-revolution/sd-webui-segment-anything.git extensions/segment-anything && \
     sed -i 's/def install_goundingdino():.*/def install_goundingdino():\n    return/g' extensions/segment-anything/scripts/dino.py
