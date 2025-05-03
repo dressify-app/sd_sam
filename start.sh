@@ -97,8 +97,8 @@ trap cleanup SIGINT SIGTERM EXIT
 
 # Запуск приложений
 echo "===== Starting applications ====="
-echo "1. Launching WebUI in background with arguments: --api --listen --port 7860"
-python launch.py --api --listen --port 7860 &
+echo "1. Launching WebUI in background with arguments: --api --listen --xformers --port 7860"
+python launch.py --api --listen --xformers --port 7860 &
 WEBUI_PID=$!
 
 # Wait until WebUI is available
