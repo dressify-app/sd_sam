@@ -95,6 +95,24 @@ cleanup() {
 # Регистрация функции cleanup для обработки сигналов завершения
 trap cleanup SIGINT SIGTERM EXIT
 
+# ===================================================================
+# Проверка наличия GroundingDINO и установка (перенесено из Dockerfile)
+# ===================================================================
+echo "===== Checking GroundingDINO ====="
+if [ ! -d "GroundingDINO" ]; then
+    echo "Cloning GroundingDINO repository..."
+    git clone https://github.com/IDEA-Research/GroundingDINO.git
+fi
+
+cd GroundingDINO
+if ! python -c "import groundingdino" >/dev/null 2>&1; then
+    echo "Installing GroundingDINO (editable)..."
+    pip install -e .
+else
+    echo "GroundingDINO already installed"
+fi
+cd ..
+
 # Запуск приложений
 echo "===== Starting applications ====="
 echo "1. Launching WebUI in background with arguments: --api --listen --xformers --port 7860"
