@@ -46,6 +46,11 @@ RUN mkdir -p repositories \
 RUN mkdir -p models/sam \
     && curl -L "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth" -o models/sam/sam_vit_h_4b8939.pth
 
+# Предварительная загрузка основной модели Stable Diffusion
+RUN mkdir -p models/Stable-diffusion \
+    && curl -L "https://huggingface.co/runwayml/stable-diffusion-v1-5/resolve/main/v1-5-pruned-emaonly.safetensors" \
+    -o models/Stable-diffusion/v1-5-pruned-emaonly.safetensors
+
 # Устанавливаем зависимости для SAM и WebUI
 RUN pip install --no-cache-dir segment-anything pillow torchvision
 RUN pip install --no-cache-dir runpod boto3 requests

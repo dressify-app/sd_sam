@@ -97,16 +97,33 @@ trap cleanup SIGINT SIGTERM EXIT
 
 # Запуск приложений
 echo "===== Starting applications ====="
-echo "1. Launching WebUI in background with arguments: --api --listen --xformers --port 7860 --skip-torch-cuda-test --no-half-vae --no-hashing"
-python launch.py --api --listen --xformers --port 7860 --skip-torch-cuda-test --no-half-vae --no-hashing &
+echo "1. Launching WebUI in background with arguments: --api --listen --xformers --port 7860 --skip-torch-cuda-test --no-half-vae --no-hashing --skip-version-check --no-download-sd-model"
+python launch.py --api --listen --xformers --port 7860 --skip-torch-cuda-test --no-half-vae --no-hashing --skip-version-check --no-download-sd-model &
 WEBUI_PID=$!
+
+# Функция проверки готовности API
+check_api() {
+    curl -s --head --fail http://127.0.0.1:7860/ >/dev/null
+    return $?
+}
+
+# Функция проверки наличия моделей
+check_models() {
+    # Проверка наличия основной модели SD
+    if [ ! -f "models/Stable-diffusion/v1-5-pruned-emaonly.safetensors" ]; then
+        echo "WARNING: SD model not found, startup might be slower"
+    fi
+}
+
+# Предварительные проверки для ускорения
+check_models
 
 # Wait until WebUI is available
 echo "Waiting for WebUI to start..."
 MAX_ATTEMPTS=100  # ~8 минут (100 * 5 секунд)
 ATTEMPT=0
 
-until curl -s --head --fail http://127.0.0.1:7860/; do
+until check_api; do
     ATTEMPT=$((ATTEMPT+1))
     if [ $ATTEMPT -ge $MAX_ATTEMPTS ]; then
         echo "ERROR: Timed out waiting for WebUI to start after 5 minutes!"
@@ -115,14 +132,10 @@ until curl -s --head --fail http://127.0.0.1:7860/; do
         exit 1
     fi
     echo "WebUI not ready yet (attempt $ATTEMPT of $MAX_ATTEMPTS). Sleeping for 5 seconds..."
-    sleep 5
+    sleep 3
 done
 
 echo "WebUI is up and running!"
-
-# Задержка для инициализации WebUI и освобождения ресурсов GPU
-echo "Waiting 10 seconds for WebUI to initialize GPU resources..."
-sleep 10
 
 echo "2. Launching RunPod handler..."
 python function_handler.py &
