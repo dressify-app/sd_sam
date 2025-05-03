@@ -1,41 +1,67 @@
 #!/bin/bash
 
-# Установка переменных для пропуска проверок репозиториев
-export SKIP_PREPARE_ENVIRONMENT=1
-export TORCH_COMMAND="pip install torch torchvision"
-export COMMANDLINE_ARGS="--api --listen --xformers --port 7860 --skip-torch-cuda-test --no-half-vae --no-hashing --skip-version-check --no-download-sd-model --disable-git-updates --skip-python-version-check"
-
-# Разогрев CUDA перед запуском
-echo "===== Warming up CUDA ====="
-python -c "import torch; print(f'CUDA available: {torch.cuda.is_available()}'); torch.ones(1).cuda()" &> /dev/null
-
+# Вывод диагностической информации
 echo "===== Diagnostics ====="
 echo "PATH=$PATH"
 echo "Current directory: $(pwd)"
 echo "Python version: $(python --version)"
 echo "Pip version: $(pip --version)"
 
-# Проверка наличия необходимых модулей Python (только информационно)
+# Проверка наличия необходимых модулей Python
 echo "===== Checking Python modules ====="
 for module in runpod boto3 requests PIL; do
     if python -c "import $module" >/dev/null 2>&1; then
         python -c "import $module; print(f'$module version: {${module}.__version__}')" 2>/dev/null || echo "$module is installed (version unknown)"
     else
-        echo "$module not found, installing..."
+        echo "$module not found, attempting to install..."
         if [ "$module" = "PIL" ]; then
-            pip install --no-cache-dir Pillow
+            pip install Pillow
         else
-            pip install --no-cache-dir $module
+            pip install $module
         fi
     fi
 done
 
-# Проверка наличия моделей SAM (только информационно)
+# Проверка наличия curl
+if ! command -v curl &> /dev/null; then
+    echo "curl not found, installing..."
+    apt-get update && apt-get install -y curl
+fi
+
+# Проверка наличия моделей SAM
 echo "===== Checking SAM models ====="
-if [ -f "models/sam/sam_vit_h_4b8939.pth" ]; then
-    echo "SAM model already exists at models/sam/sam_vit_h_4b8939.pth"
+SAM_DIR="models/sam"
+mkdir -p "$SAM_DIR"
+
+# Загрузка модели SAM, если она отсутствует
+SAM_MODEL="$SAM_DIR/sam_vit_h_4b8939.pth"
+if [ ! -f "$SAM_MODEL" ]; then
+    echo "Downloading SAM model to $SAM_MODEL..."
+    curl -L "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth" -o "$SAM_MODEL"
+    if [ $? -eq 0 ]; then
+        echo "SAM model downloaded successfully!"
+    else
+        echo "ERROR: Failed to download SAM model!"
+        exit 1
+    fi
 else
-    echo "WARNING: SAM model missing - this shouldn't happen in the container"
+    echo "SAM model already exists at $SAM_MODEL"
+fi
+
+# Проверка наличия SD WebUI
+if [ ! -f "launch.py" ]; then
+    echo "ERROR: launch.py not found in $(pwd)!"
+    echo "Files in current directory:"
+    ls -la
+    exit 1
+fi
+
+# Проверка наличия нашего handler
+if [ ! -f "function_handler.py" ]; then
+    echo "ERROR: function_handler.py not found in $(pwd)!"
+    echo "Files in current directory:"
+    ls -la
+    exit 1
 fi
 
 # Проверка переменных окружения для S3
@@ -48,7 +74,18 @@ for var in S3_ACCESS_KEY S3_SECRET_KEY S3_ENDPOINT_URL S3_BUCKET_NAME S3_REGION_
     fi
 done
 
-# Создание функции trap для очистки
+# Создание функции проверки статуса процессов
+check_process_status() {
+    local process_name=$1
+    local pid=$2
+    if kill -0 $pid 2>/dev/null; then
+        echo "$process_name (PID $pid) is running"
+    else
+        echo "WARNING: $process_name (PID $pid) has stopped"
+    fi
+}
+
+# Создание файла с функцией trap для очистки
 cleanup() {
     echo "Stopping background processes..."
     jobs -p | xargs -r kill
@@ -60,29 +97,42 @@ trap cleanup SIGINT SIGTERM EXIT
 
 # Запуск приложений
 echo "===== Starting applications ====="
-echo "1. Launching WebUI in background with arguments: $COMMANDLINE_ARGS"
-python launch.py $COMMANDLINE_ARGS &
+echo "1. Launching WebUI in background with arguments: --api --listen --xformers --port 7860 --skip-torch-cuda-test --no-half-vae --no-hashing --skip-version-check --no-download-sd-model"
+python launch.py --api --listen --xformers --port 7860 --skip-torch-cuda-test --no-half-vae --no-hashing --skip-version-check --no-download-sd-model &
 WEBUI_PID=$!
 
-# Функция проверки готовности API с более быстрым таймаутом
+# Функция проверки готовности API
 check_api() {
-    curl -s --connect-timeout 0.5 --head --fail http://127.0.0.1:7860/ >/dev/null
+    curl -s --head --fail http://127.0.0.1:7860/ >/dev/null
     return $?
 }
 
+# Функция проверки наличия моделей
+check_models() {
+    # Проверка наличия основной модели SD
+    if [ ! -f "models/Stable-diffusion/v1-5-pruned-emaonly.safetensors" ]; then
+        echo "WARNING: SD model not found, startup might be slower"
+    fi
+}
+
+# Предварительные проверки для ускорения
+check_models
+
 # Wait until WebUI is available
 echo "Waiting for WebUI to start..."
-MAX_ATTEMPTS=120
+MAX_ATTEMPTS=100  # ~8 минут (100 * 5 секунд)
 ATTEMPT=0
 
 until check_api; do
     ATTEMPT=$((ATTEMPT+1))
     if [ $ATTEMPT -ge $MAX_ATTEMPTS ]; then
-        echo "ERROR: Timed out waiting for WebUI to start!"
+        echo "ERROR: Timed out waiting for WebUI to start after 5 minutes!"
+        echo "WebUI log (last 50 lines):"
+        tail -n 50 /tmp/webui.log 2>/dev/null || echo "No log file found."
         exit 1
     fi
-    echo "WebUI not ready yet (attempt $ATTEMPT of $MAX_ATTEMPTS). Sleeping for 2 seconds..."
-    sleep 2
+    echo "WebUI not ready yet (attempt $ATTEMPT of $MAX_ATTEMPTS). Sleeping for 5 seconds..."
+    sleep 3
 done
 
 echo "WebUI is up and running!"
@@ -94,17 +144,8 @@ HANDLER_PID=$!
 # Проверка запуска процессов
 echo "Checking process status after 5 seconds..."
 sleep 5
-if kill -0 $WEBUI_PID 2>/dev/null; then
-    echo "WebUI (PID $WEBUI_PID) is running"
-else 
-    echo "WARNING: WebUI (PID $WEBUI_PID) has stopped"
-fi
-
-if kill -0 $HANDLER_PID 2>/dev/null; then
-    echo "RunPod handler (PID $HANDLER_PID) is running"
-else
-    echo "WARNING: RunPod handler (PID $HANDLER_PID) has stopped"
-fi
+check_process_status "WebUI" $WEBUI_PID
+check_process_status "RunPod handler" $HANDLER_PID
 
 echo "All processes started. Waiting for them to complete..."
 wait 

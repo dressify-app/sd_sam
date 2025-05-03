@@ -42,11 +42,6 @@ RUN mkdir -p repositories \
     && git clone https://github.com/crowsonkb/k-diffusion.git repositories/k-diffusion \
     && git clone https://github.com/salesforce/BLIP.git repositories/BLIP
 
-# Предзагрузка и фиксация конкретных версий репозиториев для исключения обновлений
-RUN cd repositories/stable-diffusion-stability-ai && git checkout 45c443b316737a4ab6e40413d7794a7f5657c19f && cd /app && \
-    cd repositories/k-diffusion && git checkout ab527a9a6d347f364e3d185ba6d714e22d80cb3c && cd /app && \
-    cd repositories/BLIP && git checkout 48211a1594f1321b00f14c9f7a5b4813144b2fb9 && cd /app
-
 # Предварительная загрузка модели SAM для избежания повторных загрузок
 RUN mkdir -p models/sam \
     && curl -L "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth" -o models/sam/sam_vit_h_4b8939.pth
@@ -56,22 +51,11 @@ RUN mkdir -p models/Stable-diffusion \
     && curl -L "https://huggingface.co/runwayml/stable-diffusion-v1-5/resolve/main/v1-5-pruned-emaonly.safetensors" \
     -o models/Stable-diffusion/v1-5-pruned-emaonly.safetensors
 
-# Предварительная загрузка моделей CLIP
-RUN mkdir -p models/CLIP && \
-    curl -L "https://openaipublic.azureedge.net/clip/models/b8cca3fd41ae0c99ba7e8951adf17d267cdb84cd88be6f7c2e0eca1737a03836/ViT-L-14.pt" -o models/CLIP/ViT-L-14.pt
-
 # Устанавливаем зависимости для SAM и WebUI
 RUN pip install --no-cache-dir segment-anything pillow torchvision
 RUN pip install --no-cache-dir runpod boto3 requests
 RUN pip install --no-cache-dir --upgrade "huggingface_hub[hf_xet]" && \
     pip install --no-cache-dir hf_xet
-
-# Установка дополнительных зависимостей для ускорения запуска
-RUN pip install --no-cache-dir open_clip_torch clip timm
-
-# Предварительная инициализация библиотек для ускорения первого импорта
-RUN python -c "import torch; import timm; import clip" > /dev/null 2>&1
-
 ENV CUDA_HOME=/usr/local/cuda
 ENV TORCH_CUDA_ARCH_LIST="6.0;6.1;7.0;7.5;8.0;8.6+PTX"
 # Добавление переменных окружения для CUDA и памяти GPU
