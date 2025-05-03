@@ -22,20 +22,38 @@ for module in runpod boto3 requests PIL; do
     fi
 done
 
-# Проверка установки и компонентов GroundingDINO
+# Проверка установки GroundingDINO и модуля _C
 echo "===== Checking GroundingDINO installation ====="
 if python -c "import groundingdino" >/dev/null 2>&1; then
     echo "GroundingDINO is installed"
-    # Проверка наличия C++ компонента _C
+    
+    # Проверка наличия модуля _C
     if python -c "from groundingdino import _C" >/dev/null 2>&1; then
-        echo "GroundingDINO _C компонент найден"
+        echo "GroundingDINO _C module is installed correctly"
     else
-        echo "ОШИБКА: GroundingDINO _C компонент не найден"
-        echo "Содержимое каталога groundingdino:"
-        ls -la $(python -c "import groundingdino, os; print(os.path.dirname(groundingdino.__file__))")
+        echo "WARNING: GroundingDINO _C module is missing! Attempting to fix..."
+        cd /tmp
+        git clone https://github.com/IDEA-Research/GroundingDINO.git
+        cd GroundingDINO
+        FORCE_CUDA=1 python setup.py build develop
+        cd /app
+        rm -rf /tmp/GroundingDINO
+        
+        # Проверяем еще раз после исправления
+        if python -c "from groundingdino import _C" >/dev/null 2>&1; then
+            echo "GroundingDINO _C module is now installed correctly"
+        else
+            echo "ERROR: Failed to install GroundingDINO _C module. This may cause issues with segment-anything extension."
+        fi
     fi
 else
-    echo "ОШИБКА: GroundingDINO не установлен"
+    echo "WARNING: GroundingDINO is not installed! Installing..."
+    cd /tmp
+    git clone https://github.com/IDEA-Research/GroundingDINO.git
+    cd GroundingDINO
+    FORCE_CUDA=1 pip install -v -e .
+    cd /app
+    rm -rf /tmp/GroundingDINO
 fi
 
 # Проверка наличия curl

@@ -2,6 +2,9 @@
 FROM pytorch/pytorch:2.0.1-cuda11.7-cudnn8-runtime
 
 ENV DEBIAN_FRONTEND=noninteractive
+ENV CUDA_HOME=/usr/local/cuda
+ENV FORCE_CUDA=1
+ENV TORCH_CUDA_ARCH_LIST="5.0;6.0;6.1;7.0;7.5;8.0;8.6+PTX"
 RUN ln -snf /usr/share/zoneinfo/$CONTAINER_TIMEZONE /etc/localtime && echo $CONTAINER_TIMEZONE > /etc/timezone
 
 # Установка необходимых системных зависимостей (оптимизировано)
@@ -15,6 +18,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-dev \
     cmake \
     ninja-build \
+    libjpeg-dev \
+    libpng-dev \
+    g++ \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -47,15 +53,15 @@ RUN mkdir -p models/sam \
 # Устанавливаем зависимости для SAM и WebUI
 RUN pip install --no-cache-dir segment-anything pillow torchvision
 RUN pip install --no-cache-dir runpod boto3 requests
-
-# Правильная установка GroundingDINO с компиляцией C++ компонентов
-RUN pip uninstall -y groundingdino || true \
+# Устанавливаем GroundingDINO с принудительной компиляцией CUDA расширений
+RUN pip uninstall -y groundingdino \
     && git clone https://github.com/IDEA-Research/GroundingDINO.git /tmp/GroundingDINO \
     && cd /tmp/GroundingDINO \
-    && pip install -v --no-cache-dir -e . \
-    && python setup.py build develop \
+    && pip install torch==2.0.1 torchvision==0.15.2 \
+    && apt-get update && apt-get install -y ninja-build \
+    && FORCE_CUDA=1 pip install -v -e . \
+    && python -c "from groundingdino.util.slconfig import SLConfig; from groundingdino.models import build_model; from groundingdino.util.utils import clean_state_dict; print('GroundingDINO import test successful')" \
     && cd /app \
-    && ls -la /opt/conda/lib/python3.10/site-packages/groundingdino* \
     && rm -rf /tmp/GroundingDINO
 
 # Устанавливаем xformers с поддержкой CUDA
