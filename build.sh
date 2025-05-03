@@ -14,9 +14,40 @@ fi
 IMAGE_NAME="sd-sam-segmentation"
 TAG="latest"
 
-# Сборка образа с использованием NVIDIA runtime
+# Проверка аргументов
+USE_NVIDIA_RUNTIME=true
+CPU_ONLY=false
+
+for arg in "$@"; do
+    case $arg in
+        --cpu-only)
+            CPU_ONLY=true
+            USE_NVIDIA_RUNTIME=false
+            shift
+            ;;
+        --no-nvidia-runtime)
+            USE_NVIDIA_RUNTIME=false
+            shift
+            ;;
+    esac
+done
+
+# Сборка образа с соответствующими параметрами
 echo "Building image: $IMAGE_NAME:$TAG"
-docker build --runtime=nvidia -t $IMAGE_NAME:$TAG .
+
+BUILD_ARGS=""
+if [ "$CPU_ONLY" = true ]; then
+    BUILD_ARGS="--build-arg DISABLE_CUDA=1"
+    echo "Building for CPU-only mode"
+fi
+
+if [ "$USE_NVIDIA_RUNTIME" = true ]; then
+    echo "Using NVIDIA runtime for build"
+    docker build --runtime=nvidia $BUILD_ARGS -t $IMAGE_NAME:$TAG .
+else
+    echo "Using standard runtime for build"
+    docker build $BUILD_ARGS -t $IMAGE_NAME:$TAG .
+fi
 
 # Проверка результата сборки
 if [ $? -eq 0 ]; then
@@ -24,7 +55,11 @@ if [ $? -eq 0 ]; then
     echo "Image $IMAGE_NAME:$TAG is ready"
     echo ""
     echo "You can run the container with:"
-    echo "docker run --gpus all -p 7860:7860 $IMAGE_NAME:$TAG"
+    if [ "$CPU_ONLY" = true ]; then
+        echo "docker run -p 7860:7860 -e DISABLE_CUDA=1 $IMAGE_NAME:$TAG"
+    else
+        echo "docker run --gpus all -p 7860:7860 $IMAGE_NAME:$TAG"
+    fi
 else
     echo "===== Build failed! ====="
     echo "If you encounter CUDA compilation issues, make sure:"

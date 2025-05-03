@@ -31,11 +31,17 @@ if python -c "import groundingdino" >/dev/null 2>&1; then
     if python -c "from groundingdino import _C" >/dev/null 2>&1; then
         echo "GroundingDINO _C module is installed correctly"
     else
-        echo "WARNING: GroundingDINO _C module is missing! Attempting to fix..."
+        echo "WARNING: GroundingDINO _C module is missing! Attempting to fix using PyTorch implementation..."
         cd /tmp
         git clone https://github.com/IDEA-Research/GroundingDINO.git
         cd GroundingDINO
-        FORCE_CUDA=1 python setup.py build develop
+        
+        # Патчим файл ms_deform_attn.py, чтобы использовать PyTorch-реализацию вместо CUDA
+        echo "Patching ms_deform_attn.py to use PyTorch implementation instead of CUDA..."
+        sed -i 's/if torch.cuda.is_available() and value.is_cuda:/if not torch.cuda.is_available():/' groundingdino/models/GroundingDINO/ms_deform_attn.py
+        
+        # Устанавливаем GroundingDINO
+        pip install -v -e .
         cd /app
         rm -rf /tmp/GroundingDINO
         
@@ -47,13 +53,45 @@ if python -c "import groundingdino" >/dev/null 2>&1; then
         fi
     fi
 else
-    echo "WARNING: GroundingDINO is not installed! Installing..."
+    echo "WARNING: GroundingDINO is not installed! Installing with PyTorch implementation..."
     cd /tmp
     git clone https://github.com/IDEA-Research/GroundingDINO.git
     cd GroundingDINO
-    FORCE_CUDA=1 pip install -v -e .
+    
+    # Патчим файл ms_deform_attn.py, чтобы использовать PyTorch-реализацию вместо CUDA
+    echo "Patching ms_deform_attn.py to use PyTorch implementation instead of CUDA..."
+    sed -i 's/if torch.cuda.is_available() and value.is_cuda:/if not torch.cuda.is_available():/' groundingdino/models/GroundingDINO/ms_deform_attn.py
+    
+    # Устанавливаем GroundingDINO
+    pip install -v -e .
     cd /app
     rm -rf /tmp/GroundingDINO
+fi
+
+# Проверка и исправление патча для переноса модели на CUDA
+echo "===== Checking CUDA model transfer patches ====="
+DINO_FILES=$(find /app/extensions/segment-anything/scripts -name "dino.py" -type f)
+if [ -n "$DINO_FILES" ]; then
+    echo "Found dino.py files, checking for model.to('cuda:0') patch..."
+    for file in $DINO_FILES; do
+        if ! grep -q "model = model.to(\"cuda:0\")" "$file"; then
+            echo "Adding model.to('cuda:0') patch to $file"
+            # Создаем временный файл с патчем
+            TEMP_FILE=$(mktemp)
+            awk '{
+                print $0;
+                if ($0 ~ /model = load_model\(.*\)/) {
+                    print "    if torch.cuda.is_available():";
+                    print "        model = model.to(\"cuda:0\")";
+                }
+            }' "$file" > "$TEMP_FILE"
+            mv "$TEMP_FILE" "$file"
+        else
+            echo "CUDA model transfer patch already applied to $file"
+        fi
+    done
+else
+    echo "WARNING: No dino.py files found in segment-anything extension"
 fi
 
 # Проверка наличия curl
@@ -131,8 +169,14 @@ trap cleanup SIGINT SIGTERM EXIT
 
 # Запуск приложений
 echo "===== Starting applications ====="
-echo "1. Launching WebUI in background with arguments: --api --listen --xformers --port 7860"
-python launch.py --api --listen --xformers --port 7860 &
+echo "1. Launching WebUI in background with appropriate arguments"
+if [ -n "$DISABLE_CUDA" ] || ! python -c "import torch; print(torch.cuda.is_available())" | grep -q "True"; then
+    echo "Running in CPU mode: --api --listen --skip-torch-cuda-test --no-half --precision=full --port 7860"
+    python launch.py --api --listen --skip-torch-cuda-test --no-half --precision=full --port 7860 &
+else
+    echo "Running with CUDA: --api --listen --xformers --port 7860"
+    python launch.py --api --listen --xformers --port 7860 &
+fi
 WEBUI_PID=$!
 
 # Wait until WebUI is available
