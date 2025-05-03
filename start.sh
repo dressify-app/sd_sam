@@ -22,6 +22,22 @@ for module in runpod boto3 requests PIL; do
     fi
 done
 
+# Проверка установки и компонентов GroundingDINO
+echo "===== Checking GroundingDINO installation ====="
+if python -c "import groundingdino" >/dev/null 2>&1; then
+    echo "GroundingDINO is installed"
+    # Проверка наличия C++ компонента _C
+    if python -c "from groundingdino import _C" >/dev/null 2>&1; then
+        echo "GroundingDINO _C компонент найден"
+    else
+        echo "ОШИБКА: GroundingDINO _C компонент не найден"
+        echo "Содержимое каталога groundingdino:"
+        ls -la $(python -c "import groundingdino, os; print(os.path.dirname(groundingdino.__file__))")
+    fi
+else
+    echo "ОШИБКА: GroundingDINO не установлен"
+fi
+
 # Проверка наличия curl
 if ! command -v curl &> /dev/null; then
     echo "curl not found, installing..."

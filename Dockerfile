@@ -15,8 +15,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-dev \
     cmake \
     ninja-build \
-    cargo \
-    rustc \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -50,14 +48,15 @@ RUN mkdir -p models/sam \
 RUN pip install --no-cache-dir segment-anything pillow torchvision
 RUN pip install --no-cache-dir runpod boto3 requests
 
-# Установка GroundingDINO с поддержкой CUDA
-ENV CUDA_HOME=/usr/local/cuda
-ENV TORCH_CUDA_ARCH_LIST="6.0;6.1;7.0;7.5;8.0;8.6+PTX"
-RUN pip install --no-cache-dir --force-reinstall --no-build-isolation git+https://github.com/IDEA-Research/GroundingDINO.git@main
-
-# Фикс для GroundingDINO в случае, если компиляция расширений не удалась
-RUN sed -i 's/if torch.cuda.is_available() and value.is_cuda:/if not torch.cuda.is_available():/' \
-    /app/extensions/segment-anything/models/GroundingDINO/ms_deform_attn.py
+# Правильная установка GroundingDINO с компиляцией C++ компонентов
+RUN pip uninstall -y groundingdino || true \
+    && git clone https://github.com/IDEA-Research/GroundingDINO.git /tmp/GroundingDINO \
+    && cd /tmp/GroundingDINO \
+    && pip install -v --no-cache-dir -e . \
+    && python setup.py build develop \
+    && cd /app \
+    && ls -la /opt/conda/lib/python3.10/site-packages/groundingdino* \
+    && rm -rf /tmp/GroundingDINO
 
 # Устанавливаем xformers с поддержкой CUDA
 RUN pip install --no-cache-dir xformers==0.0.22 triton
