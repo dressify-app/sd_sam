@@ -27,8 +27,7 @@ RUN git clone https://github.com/AUTOMATIC1111/stable-diffusion-webui.git .
 
 # Клонируем плагин Segment-Anything
 RUN git clone https://github.com/continue-revolution/sd-webui-segment-anything.git extensions/segment-anything && \
-    # Удаляем скрипты расширения, чтобы избежать import-ошибок
-    rm -rf extensions/segment-anything/scripts
+    sed -i 's/def install_goundingdino():.*/def install_goundingdino():\n    return/g' extensions/segment-anything/scripts/dino.py
 
 # Предварительно загружаем модель GroundingDINO для избежания повторных загрузок
 RUN mkdir -p extensions/segment-anything/models/grounding-dino \
