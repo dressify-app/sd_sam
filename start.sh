@@ -7,26 +7,12 @@ echo "Current directory: $(pwd)"
 echo "Python version: $(python --version)"
 echo "Pip version: $(pip --version)"
 
-# Проверка наличия необходимых модулей Python
+# Проверка наличия необходимых модулей Python (оптимизировано)
 echo "===== Checking Python modules ====="
-for module in runpod boto3 requests PIL; do
-    if python -c "import $module" >/dev/null 2>&1; then
-        python -c "import $module; print(f'$module version: {${module}.__version__}')" 2>/dev/null || echo "$module is installed (version unknown)"
-    else
-        echo "$module not found, attempting to install..."
-        if [ "$module" = "PIL" ]; then
-            pip install Pillow
-        else
-            pip install $module
-        fi
-    fi
-done
-
-# Проверка наличия curl
-if ! command -v curl &> /dev/null; then
-    echo "curl not found, installing..."
-    apt-get update && apt-get install -y curl
-fi
+python -c "import runpod; print(f'runpod version: {runpod.__version__}')" 2>/dev/null || pip install runpod
+python -c "import boto3; print(f'boto3 version: {boto3.__version__}')" 2>/dev/null || pip install boto3
+python -c "import requests; print(f'requests version: {requests.__version__}')" 2>/dev/null || pip install requests
+python -c "import PIL; print(f'PIL version: {PIL.__version__}')" 2>/dev/null || pip install Pillow
 
 # Проверка наличия моделей SAM
 echo "===== Checking SAM models ====="
@@ -46,22 +32,6 @@ if [ ! -f "$SAM_MODEL" ]; then
     fi
 else
     echo "SAM model already exists at $SAM_MODEL"
-fi
-
-# Проверка наличия SD WebUI
-if [ ! -f "launch.py" ]; then
-    echo "ERROR: launch.py not found in $(pwd)!"
-    echo "Files in current directory:"
-    ls -la
-    exit 1
-fi
-
-# Проверка наличия нашего handler
-if [ ! -f "function_handler.py" ]; then
-    echo "ERROR: function_handler.py not found in $(pwd)!"
-    echo "Files in current directory:"
-    ls -la
-    exit 1
 fi
 
 # Проверка переменных окружения для S3
@@ -97,7 +67,13 @@ trap cleanup SIGINT SIGTERM EXIT
 
 # Запуск приложений
 echo "===== Starting applications ====="
-echo "1. Launching WebUI in background with arguments: --api --listen --xformers --port 7860 --skip-torch-cuda-test --no-half-vae --no-hashing --skip-version-check --no-download-sd-model"
+
+# Запуск RunPod handler в фоне сразу (параллельно с WebUI)
+echo "1. Launching RunPod handler in background..."
+python function_handler.py &
+HANDLER_PID=$!
+
+echo "2. Launching WebUI with arguments: --api --listen --xformers --port 7860 --skip-torch-cuda-test --no-half-vae --no-hashing --skip-version-check --no-download-sd-model"
 python launch.py --api --listen --xformers --port 7860 --skip-torch-cuda-test --no-half-vae --no-hashing --skip-version-check --no-download-sd-model &
 WEBUI_PID=$!
 
@@ -107,20 +83,9 @@ check_api() {
     return $?
 }
 
-# Функция проверки наличия моделей
-check_models() {
-    # Проверка наличия основной модели SD
-    if [ ! -f "models/Stable-diffusion/v1-5-pruned-emaonly.safetensors" ]; then
-        echo "WARNING: SD model not found, startup might be slower"
-    fi
-}
-
-# Предварительные проверки для ускорения
-check_models
-
 # Wait until WebUI is available
 echo "Waiting for WebUI to start..."
-MAX_ATTEMPTS=100  # ~8 минут (100 * 5 секунд)
+MAX_ATTEMPTS=300  # 5 минут (300 * 1 секунда)
 ATTEMPT=0
 
 until check_api; do
@@ -131,19 +96,14 @@ until check_api; do
         tail -n 50 /tmp/webui.log 2>/dev/null || echo "No log file found."
         exit 1
     fi
-    echo "WebUI not ready yet (attempt $ATTEMPT of $MAX_ATTEMPTS). Sleeping for 5 seconds..."
-    sleep 3
+    echo "WebUI not ready yet (attempt $ATTEMPT of $MAX_ATTEMPTS). Sleeping for 1 second..."
+    sleep 1
 done
 
 echo "WebUI is up and running!"
 
-echo "2. Launching RunPod handler..."
-python function_handler.py &
-HANDLER_PID=$!
-
 # Проверка запуска процессов
-echo "Checking process status after 5 seconds..."
-sleep 5
+echo "Checking process status..."
 check_process_status "WebUI" $WEBUI_PID
 check_process_status "RunPod handler" $HANDLER_PID
 
