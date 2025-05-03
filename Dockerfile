@@ -1,5 +1,5 @@
 # Используем образ Python 3.10 с поддержкой CUDA
-FROM pytorch/pytorch:2.0.1-cuda11.7-cudnn8-runtime
+FROM pytorch/pytorch:2.0.1-cuda11.7-cudnn8-devel
 
 ENV DEBIAN_FRONTEND=noninteractive
 
