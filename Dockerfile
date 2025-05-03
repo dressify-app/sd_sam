@@ -15,6 +15,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ninja-build \
     g++ \
     python3-dev \
+    nvidia-cuda-toolkit \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
