@@ -47,7 +47,12 @@ RUN mkdir -p models/sam \
 # Устанавливаем зависимости для SAM и WebUI
 RUN pip install --no-cache-dir segment-anything pillow torchvision
 RUN pip install --no-cache-dir runpod boto3 requests
-RUN pip install --no-cache-dir --force-reinstall --no-build-isolation git+https://github.com/IDEA-Research/GroundingDINO.git@main
+RUN pip uninstall -y groundingdino \
+    && git clone https://github.com/IDEA-Research/GroundingDINO.git /tmp/GroundingDINO \
+    && cd /tmp/GroundingDINO \
+    && pip install --no-cache-dir -e . \
+    && cd /app \
+    && rm -rf /tmp/GroundingDINO
 
 # Устанавливаем xformers с поддержкой CUDA
 RUN pip install --no-cache-dir xformers==0.0.22 triton
