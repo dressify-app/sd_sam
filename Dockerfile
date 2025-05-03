@@ -53,12 +53,7 @@ RUN pip install --no-cache-dir runpod boto3 requests
 # Установка GroundingDINO с поддержкой CUDA
 ENV CUDA_HOME=/usr/local/cuda
 ENV TORCH_CUDA_ARCH_LIST="6.0;6.1;7.0;7.5;8.0;8.6+PTX"
-RUN pip uninstall -y groundingdino \
-    && git clone https://github.com/IDEA-Research/GroundingDINO.git /tmp/GroundingDINO \
-    && cd /tmp/GroundingDINO \
-    && pip install --no-cache-dir -e . \
-    && cd /app \
-    && rm -rf /tmp/GroundingDINO
+RUN pip install --no-cache-dir --force-reinstall --no-build-isolation git+https://github.com/IDEA-Research/GroundingDINO.git@main
 
 # Фикс для GroundingDINO в случае, если компиляция расширений не удалась
 RUN sed -i 's/if torch.cuda.is_available() and value.is_cuda:/if not torch.cuda.is_available():/' \
