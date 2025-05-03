@@ -105,7 +105,8 @@ if [ ! -d "GroundingDINO" ]; then
 fi
 
 cd GroundingDINO
-if ! python -c "import groundingdino" >/dev/null 2>&1; then
+# Установка GroundingDINO только при первом запуске
+if ! pip show groundingdino >/dev/null 2>&1; then
     echo "Installing GroundingDINO (editable)..."
     pip install -e .
 else
