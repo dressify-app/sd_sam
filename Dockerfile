@@ -53,6 +53,12 @@ RUN pip install --no-cache-dir --upgrade "huggingface_hub[hf_xet]" && \
     pip install --no-cache-dir hf_xet
 ENV CUDA_HOME=/usr/local/cuda
 ENV TORCH_CUDA_ARCH_LIST="6.0;6.1;7.0;7.5;8.0;8.6+PTX"
+# Добавление переменных окружения для CUDA и памяти GPU
+ENV CUDA_LAUNCH_BLOCKING=1
+ENV PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:128
+ENV NVIDIA_VISIBLE_DEVICES=all
+ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
+ENV PYTHONUNBUFFERED=1
 
 # Устанавливаем xformers с поддержкой CUDA
 RUN pip install --no-cache-dir xformers==0.0.22 triton

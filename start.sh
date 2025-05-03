@@ -97,8 +97,8 @@ trap cleanup SIGINT SIGTERM EXIT
 
 # Запуск приложений
 echo "===== Starting applications ====="
-echo "1. Launching WebUI in background with arguments: --api --listen --xformers --port 7860 --reinstall-torch --reinstall-xformers"
-python launch.py --api --listen --xformers --port 7860 &
+echo "1. Launching WebUI in background with arguments: --api --listen --xformers --port 7860 --skip-torch-cuda-test --no-half-vae --no-hashing"
+python launch.py --api --listen --xformers --port 7860 --skip-torch-cuda-test --no-half-vae --no-hashing &
 WEBUI_PID=$!
 
 # Wait until WebUI is available
@@ -119,6 +119,10 @@ until curl -s --head --fail http://127.0.0.1:7860/; do
 done
 
 echo "WebUI is up and running!"
+
+# Задержка для инициализации WebUI и освобождения ресурсов GPU
+echo "Waiting 10 seconds for WebUI to initialize GPU resources..."
+sleep 10
 
 echo "2. Launching RunPod handler..."
 python function_handler.py &
