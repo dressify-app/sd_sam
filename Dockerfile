@@ -30,7 +30,7 @@ RUN git config --global core.compression 9
 RUN git clone https://github.com/AUTOMATIC1111/stable-diffusion-webui.git .
 
 # Клонируем плагин Segment-Anything
-RUN git clone --depth 1 https://github.com/continue-revolution/sd-webui-segment-anything.git extensions/segment-anything && \
+RUN git clone https://github.com/continue-revolution/sd-webui-segment-anything.git extensions/segment-anything && \
     sed -i 's/def install_goundingdino():.*/def install_goundingdino():\n    return/g' extensions/segment-anything/scripts/dino.py
 
 # Предварительно загружаем модель GroundingDINO для избежания повторных загрузок
@@ -40,8 +40,8 @@ RUN mkdir -p extensions/segment-anything/models/grounding-dino \
 
 # Предварительное клонирование дополнительных репозиториев для ускорения старта
 RUN mkdir -p repositories \
-    && git clone --depth 1 https://github.com/AUTOMATIC1111/stable-diffusion-webui-assets.git repositories/stable-diffusion-webui-assets \
-    && git clone --depth 1 https://github.com/Stability-AI/stablediffusion.git repositories/stable-diffusion-stability-ai \
+    && git clone https://github.com/AUTOMATIC1111/stable-diffusion-webui-assets.git repositories/stable-diffusion-webui-assets \
+    && git clone https://github.com/Stability-AI/stablediffusion.git repositories/stable-diffusion-stability-ai \
     && git clone https://github.com/Stability-AI/generative-models.git repositories/generative-models \
     && git clone https://github.com/crowsonkb/k-diffusion.git repositories/k-diffusion \
     && git clone https://github.com/salesforce/BLIP.git repositories/BLIP
@@ -93,7 +93,7 @@ ENV NCCL_P2P_DISABLE=0
 RUN pip install --no-cache-dir xformers==0.0.22 triton
 
 # Установка GroundingDINO последним шагом
-RUN git clone --depth 1 https://github.com/IDEA-Research/GroundingDINO.git && \
+RUN git clone https://github.com/IDEA-Research/GroundingDINO.git && \
     cd GroundingDINO && \
     pip install --no-cache-dir -e . && \
     cd ..
