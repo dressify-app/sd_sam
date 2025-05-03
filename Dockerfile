@@ -57,6 +57,12 @@ ENV TORCH_CUDA_ARCH_LIST="6.0;6.1;7.0;7.5;8.0;8.6+PTX"
 # Устанавливаем xformers с поддержкой CUDA
 RUN pip install --no-cache-dir xformers==0.0.22 triton
 
+# Установка GroundingDINO последним шагом
+RUN git clone https://github.com/IDEA-Research/GroundingDINO.git && \
+    cd GroundingDINO && \
+    pip install -e . && \
+    cd ..
+
 # Копируем наши файлы
 COPY function_handler.py /app/function_handler.py
 COPY start.sh /app/start.sh
