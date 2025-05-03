@@ -50,7 +50,7 @@ RUN mkdir -p models/sam \
 RUN pip install --no-cache-dir segment-anything pillow torchvision
 RUN pip install --no-cache-dir runpod boto3 requests
 ENV CUDA_HOME=/usr/local/cuda
-ENV TORCH_CUDA_ARCH_LIST="6.0;6.1;7.0;7.5;8.0;8.6+PTX;8.9;9.0"
+ENV TORCH_CUDA_ARCH_LIST="6.0;6.1;7.0;7.5;8.0;8.6+PTX"
 
 # Устанавливаем xformers с поддержкой CUDA
 RUN pip install --no-cache-dir xformers==0.0.22 triton
