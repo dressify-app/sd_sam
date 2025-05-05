@@ -199,7 +199,7 @@ def process_request(job):
     for key, val in list(params.items()):
         lk = key.lower()
         # одиночные поля, оканчивающиеся на image
-        if lk.endswith('image') and isinstance(val, str):
+        if (lk.endswith('image') or lk == 'mask') and isinstance(val, str):
             try:
                 params[key] = _maybe_fetch(val)
             except Exception as e:
