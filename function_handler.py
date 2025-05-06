@@ -12,6 +12,8 @@ import cv2
 from ultralytics import YOLO  # yolov8‑pose
 from mobile_sam import sam_model_registry, SamAutomaticMaskGenerator
 
+os.environ["ULTRALYTICS_SKIP_VALIDATE"] = "1"
+
 try:
     from fastapi import FastAPI, Body
     import uvicorn
@@ -80,9 +82,10 @@ def _upload_to_s3(image_data: bytes | str, *, source_type: str = "base64") -> st
 # Fast body‑mask pipeline: YOLOv8‑pose + MobileSAM
 # ============================================================
 
-device = "cuda" if torch.cuda.is_available() else "cpu"
+device = "cuda"      # или "cpu"
 
-yolo_pose = YOLO("yolov8x-pose.pt").to(device).eval()
+yolo_pose = YOLO("yolov8x-pose.pt")      # <- загрузка уже включает веса
+yolo_pose.model.to(device).eval()        # переносим **внутреннюю** модель и ставим eval
 try:
     yolo_pose.fuse()  # ~10 % speed‑up
 except Exception:

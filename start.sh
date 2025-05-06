@@ -21,12 +21,15 @@ echo "Model weights are present."
 #  запускаем WebUI (только API)
 # ------------------------------------------------------------
 echo "Starting Stable‑Diffusion WebUI (API only)…"
-python launch.py \
+export COMMANDLINE_ARGS="\
   --api --listen --port 7860 \
   --xformers \
-  --skip-version-check \
-  --no-download-sd-model \
-  > /tmp/webui.log 2>&1 &
+  --skip-version-check --skip-torch-cuda-test \
+  --no-hashing --disable-safe-unpickle \
+  --disable-console-progressbars \
+  --ckpt /app/models/Stable-diffusion/v1-5-pruned-emaonly-fp16.safetensors \
+  --no-download-sd-model"
+python launch.py $COMMANDLINE_ARGS > /tmp/webui.log 2>&1 &
 
 WEBUI_PID=$!
 
