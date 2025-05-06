@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -e
+export PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:64
 
 echo "===== Diagnostics ====="
 python -V
@@ -9,13 +10,18 @@ echo "CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"
 # ------------------------------------------------------------
 #  быстрая проверка весов
 # ------------------------------------------------------------
+MOBILE_SHA=3d3a5bb4424eb0f76fbd6d4259f1e13d6e7b826dc6e324d4b7f6bb51f3f9f08
+if ! echo "${MOBILE_SHA}  /app/mobile_sam.pt" | sha256sum -c -; then
+  echo "Re‑downloading mobile_sam.pt…"
+  curl -L --retry 5 --retry-max-time 120 \
+       https://huggingface.co/ChaoningZhang/MobileSAM/resolve/main/mobile_sam.pt \
+       -o /app/mobile_sam.pt
+fi
+
 for f in /app/yolov8x-pose.pt /app/mobile_sam.pt; do
-  if [[ ! -f "$f" ]]; then
-    echo "ERROR: weight $f not found in container!"
-    exit 1
-  fi
+  [[ -f "$f" ]] || { echo "ERROR: weight $f not found!"; exit 1; }
 done
-echo "Model weights are present."
+echo "Model weights are present and verified."
 
 # ------------------------------------------------------------
 #  запускаем WebUI (только API)
