@@ -155,7 +155,7 @@ def _process_sam_results(response_data):
                         output[key] = uploaded_masks
                         # Добавляем поле result_url для легкого доступа
                         if 'result_url' not in response_data:
-                            response_data['result_url'] = uploaded_masks[0] if uploaded_masks else None
+                            response_data['result_url'] = uploaded_masks[-1] if uploaded_masks else None
         
         # Для обратной совместимости проверяем также корневые поля
         for key in ['masks', 'masked_images', 'blended_images']:
@@ -170,7 +170,7 @@ def _process_sam_results(response_data):
                     response_data[key] = uploaded_masks
                     # Добавляем поле result_url для легкого доступа если его еще нет
                     if 'result_url' not in response_data:
-                        response_data['result_url'] = uploaded_masks[0] if uploaded_masks else None
+                        response_data['result_url'] = uploaded_masks[-1] if uploaded_masks else None
         
         return response_data
     except Exception as e:
