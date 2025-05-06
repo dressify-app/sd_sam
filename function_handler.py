@@ -10,7 +10,7 @@ import numpy as np
 import torch
 import cv2
 from ultralytics import YOLO  # yolov8‑pose
-from mobilesam import sam_model_registry, SamAutomaticMaskGenerator
+from mobile_sam import sam_model_registry, SamAutomaticMaskGenerator
 
 try:
     from fastapi import FastAPI, Body
