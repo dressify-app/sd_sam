@@ -26,9 +26,9 @@ RUN git clone https://github.com/AUTOMATIC1111/stable-diffusion-webui.git .
 # YOLOv8‑pose
 RUN curl -L https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8x-pose.pt \
         -o /app/yolov8x-pose.pt
-# MobileSAM
-RUN curl -L https://huggingface.co/ChaoningZhang/MobileSAM/resolve/main/mobile_sam.pt \
-        -o /app/mobile_sam.pt
+# Segment‑Anything (ViT‑B)
+RUN curl -L https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth \
+        -o /app/sam_vit_b_01ec64.pth
 # Stable‑Diffusion v1.5
 RUN mkdir -p models/Stable-diffusion && \
     curl -L https://huggingface.co/runwayml/stable-diffusion-v1-5/resolve/main/v1-5-pruned-emaonly.safetensors \
@@ -39,9 +39,9 @@ RUN mkdir -p models/Stable-diffusion && \
 # ----------------------------------------------------------------------
 RUN pip install --no-cache-dir \
         ultralytics==8.2.0 \
-        git+https://github.com/ChaoningZhang/MobileSAM.git \
+        git+https://github.com/facebookresearch/segment-anything.git \
         opencv-python-headless \
-        segment-anything pillow torchvision \
+        pillow torchvision \
         runpod boto3 requests \
         xformers==0.0.22 triton
 

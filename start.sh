@@ -8,17 +8,9 @@ pip -V
 echo "CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"
 
 # ------------------------------------------------------------
-#  быстрая проверка весов
+#  проверка весов
 # ------------------------------------------------------------
-MOBILE_SHA=3d3a5bb4424eb0f76fbd6d4259f1e13d6e7b826dc6e324d4b7f6bb51f3f9f08
-if ! echo "${MOBILE_SHA}  /app/mobile_sam.pt" | sha256sum -c -; then
-  echo "Re‑downloading mobile_sam.pt…"
-  curl -L --retry 5 --retry-max-time 120 \
-       https://huggingface.co/ChaoningZhang/MobileSAM/resolve/main/mobile_sam.pt \
-       -o /app/mobile_sam.pt
-fi
-
-for f in /app/yolov8x-pose.pt /app/mobile_sam.pt; do
+for f in /app/yolov8x-pose.pt /app/sam_vit_b_01ec64.pth; do
   [[ -f "$f" ]] || { echo "ERROR: weight $f not found!"; exit 1; }
 done
 echo "Model weights are present and verified."
@@ -33,7 +25,7 @@ export COMMANDLINE_ARGS="\
   --skip-version-check --skip-torch-cuda-test \
   --no-hashing --disable-safe-unpickle \
   --disable-console-progressbars \
-  --ckpt /app/models/Stable-diffusion/v1-5-pruned-emaonly-fp16.safetensors \
+  --ckpt /app/models/Stable-diffusion/v1-5-pruned-emaonly.safetensors \
   --no-download-sd-model"
 python launch.py $COMMANDLINE_ARGS > /tmp/webui.log 2>&1 &
 

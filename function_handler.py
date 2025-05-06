@@ -9,17 +9,20 @@ from PIL import Image
 import numpy as np
 import torch
 import cv2
-from ultralytics import YOLO  # yolov8‑pose
-from mobile_sam import sam_model_registry, SamAutomaticMaskGenerator
+from ultralytics import YOLO               # yolov8‑pose
+from segment_anything import (             # стандартный SAM
+    sam_model_registry,
+    SamAutomaticMaskGenerator,
+)
 
 os.environ["ULTRALYTICS_SKIP_VALIDATE"] = "1"
 
 try:
     from fastapi import FastAPI, Body
     import uvicorn
-except ImportError:  # локальный режим может быть без этих пакетов
-    FastAPI = None  # type: ignore
-    uvicorn = None  # type: ignore
+except ImportError:                         # локальный режим может быть без этих пакетов
+    FastAPI = None                          # type: ignore
+    uvicorn = None                          # type: ignore
 
 # ============================================================
 # helpers: S3 upload + base64 utilities
@@ -37,7 +40,7 @@ def _upload_to_s3(image_data: bytes | str, *, source_type: str = "base64") -> st
     if not all([s3_access_key, s3_secret_key, s3_endpoint_url, s3_bucket_name]):
         raise ValueError("Missing S3 env vars")
 
-    # decode/normalise
+    # decode / normalise
     if source_type == "base64":
         if isinstance(image_data, str):
             if image_data.startswith("data:image"):
@@ -79,21 +82,27 @@ def _upload_to_s3(image_data: bytes | str, *, source_type: str = "base64") -> st
     return f"{s3_endpoint_url.rstrip('/')}/{s3_bucket_name}/{key_path}"
 
 # ============================================================
-# Fast body‑mask pipeline: YOLOv8‑pose + MobileSAM
+# Fast body‑mask pipeline: YOLOv8‑pose + Segment‑Anything
 # ============================================================
 
-device = "cuda"      # или "cpu"
+device = "cuda"  # или "cpu"
 
-yolo_pose = YOLO("yolov8x-pose.pt")      # <- загрузка уже включает веса
-yolo_pose.model.to(device).eval()        # переносим **внутреннюю** модель и ставим eval
+yolo_pose = YOLO("yolov8x-pose.pt")  # <- загрузка уже включает веса
+yolo_pose.model.to(device).eval()    # переносим **внутреннюю** модель и ставим eval
 try:
-    yolo_pose.fuse()  # ~10 % speed‑up
+    yolo_pose.fuse()                 # ~10 % speed‑up
 except Exception:
     pass
 
-sam_ckpt = os.getenv("MOBILESAM_CKPT", "mobile_sam.pt")
-sam_model = sam_model_registry["vit_t"](checkpoint=sam_ckpt).to(device).eval()
-mask_gen = SamAutomaticMaskGenerator(sam_model, points_per_side=8)
+# --- SAM ----------------------------------------------------------------
+sam_ckpt = os.getenv("SAM_CKPT", "sam_vit_b_01ec64.pth")  # vit‑b по‑умолчанию
+sam_model = sam_model_registry["vit_b"](checkpoint=sam_ckpt).to(device).eval()
+mask_gen = SamAutomaticMaskGenerator(
+    sam_model,
+    points_per_side=16,
+    pred_iou_thresh=0.86,
+    stability_score_thresh=0.92,
+)
 
 def _b64_to_cv2(img_b64: str) -> np.ndarray:
     if img_b64.startswith("data:image"):
@@ -112,16 +121,16 @@ def generate_body_mask(img_b64: str) -> tuple[str, dict]:
         raise ValueError("No person detected")
     idx = int(torch.argmax(pose.boxes.conf))
     box_xyxy = pose.boxes.xyxy[idx].cpu().numpy().astype(int)
-    keypts = pose.keypoints.xy[idx].cpu().numpy().astype(int)  # (17,2)
+    keypts = pose.keypoints.xy[idx].cpu().numpy().astype(int)  # (17, 2)
 
     x1, y1, x2, y2 = box_xyxy
     crop = img_bgr[y1:y2, x1:x2]
 
-    # 2. MobileSAM full‑body mask ---------------------------------------------------
+    # 2. SAM full‑body mask --------------------------------------------------------
     masks = mask_gen.generate(crop)
     body_mask = max(masks, key=lambda m: m["area"])["segmentation"].astype(bool)
 
-    # 3. Build head+hair mask -------------------------------------------------------
+    # 3. Build head+hair mask ------------------------------------------------------
     head_idx = [0, 1, 2, 3, 4]  # nose, eyes, ears
     head_pts = keypts[head_idx]
     valid_head = (head_pts[:, 0] > 0) & (head_pts[:, 1] > 0)
@@ -131,17 +140,16 @@ def generate_body_mask(img_b64: str) -> tuple[str, dict]:
         hx1, hy1 = hp.min(axis=0)
         hx2, hy2 = hp.max(axis=0)
         head_h = max(hy2 - hy1, 1)
-        # extend upward to include hair (1.5 × head height)
         up_margin   = int(head_h * 1.5)
         side_margin = int(head_h * 0.3)
 
         hx1 = max(hx1 - side_margin - x1, 0)
         hx2 = min(hx2 - x1 + side_margin, crop.shape[1] - 1)
-        hy1 = max(hy1 - up_margin - y1, 0)  # go far above to cover hair
+        hy1 = max(hy1 - up_margin - y1, 0)
         hy2 = min(hy2 - y1 + int(head_h * 0.3), crop.shape[0] - 1)
         head_mask[hy1:hy2, hx1:hx2] = True
 
-    # 4. Build shoes mask -----------------------------------------------------------
+    # 4. Build shoes mask ----------------------------------------------------------
     ank_idx = [15, 16]
     ank_pts = keypts[ank_idx]
     valid_ank = (ank_pts[:, 1] > 0)
@@ -151,9 +159,8 @@ def generate_body_mask(img_b64: str) -> tuple[str, dict]:
         sy1 = max(ay - y1, 0)
         shoes_mask[sy1:, :] = True
 
-    # 5. Combine & refine -----------------------------------------------------------
+    # 5. Combine & refine ----------------------------------------------------------
     final_crop = np.logical_and(body_mask, np.logical_not(np.logical_or(head_mask, shoes_mask)))
-
     final_crop = cv2.dilate(final_crop.astype(np.uint8), np.ones((5, 5), np.uint8), 2).astype(bool)
 
     full_mask = np.zeros((h, w), dtype=np.uint8)
