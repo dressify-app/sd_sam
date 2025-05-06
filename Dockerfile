@@ -39,7 +39,7 @@ RUN mkdir -p models/Stable-diffusion && \
 # ----------------------------------------------------------------------
 RUN pip install --no-cache-dir \
         ultralytics==8.2.0 \
-        mobile-sam \
+        git+https://github.com/ChaoningZhang/MobileSAM.git \
         opencv-python-headless \
         segment-anything pillow torchvision \
         runpod boto3 requests \
