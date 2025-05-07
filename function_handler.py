@@ -175,39 +175,39 @@ def generate_body_mask(img_b64: str) -> tuple[str, dict]:
         sy1 = max(ay - y1, 0)
         shoes_mask[sy1:, :] = True
 
-    # 3b.  HEAD + HAIR  через линию плеч
-    shldr_idx  = [5, 6]                     # COCO: L/R shoulder
-    shldr_pts  = keypts[shldr_idx]
-    valid_shld = (shldr_pts[:, 1] > 0) & (shldr_pts[:, 0] > 0)
+    # 3b.  HEAD + HAIR  –‑ компактная окружность
+    head_idx   = [0, 1, 2, 3, 4]                   # nose + eyes + ears
+    head_pts   = keypts[head_idx]
+    valid_head = (head_pts[:, 0] > 0) & (head_pts[:, 1] > 0)
 
     head_mask = np.zeros_like(body_mask)
 
-    if valid_shld.any():
-        # средняя высота плеч относительно кропа
-        y_shldr = int(shldr_pts[valid_shld, 1].mean()) - y1
+    if valid_head.any():
+        hp = head_pts[valid_head]
+        x_min, y_min = hp.min(axis=0)
+        x_max, y_max = hp.max(axis=0)
 
-        # запас: +8 % высоты туловища (для воротников, шарфов)
-        margin  = int(0.08 * body_mask.shape[0])
-        cut_y   = max(y_shldr - margin, 0)
+        # центр головы в координатах кропа
+        cx = int((x_min + x_max) / 2) - x1
+        cy = int((y_min + y_max) / 2) - y1
 
-        head_mask[:cut_y, :] = True                # всё выше линии плеч → True
+        head_h = y_max - y_min
+        head_w = x_max - x_min
+        radius = int(max(head_h, head_w) * 0.9)      # 0.9 ≈ чуть больше головы
+
+        # сдвигаем чуть вверх, чтобы захватить волосы / шапки
+        cy -= int(head_h * 0.25)
+
+        cv2.circle(head_mask, (cx, cy), radius, 1, thickness=-1)
     else:
-        # резервный вариант, если плеч не нашли: нос/глаза (как раньше)
-        head_idx = [0, 1, 2, 3, 4]
-        head_pts = keypts[head_idx]
-        valid_head = (head_pts[:, 0] > 0) & (head_pts[:, 1] > 0)
-        if valid_head.any():
-            hp = head_pts[valid_head]
-            hx1, hy1 = hp.min(axis=0);  hx2, hy2 = hp.max(axis=0)
-            head_h   = max(hy2 - hy1, 1)
-            up       = int(head_h * 1.5)
-            side     = int(head_h * 0.3)
-
-            hx1 = max(hx1 - side - x1, 0)
-            hx2 = min(hx2 - x1 + side, crop.shape[1] - 1)
-            hy1 = max(hy1 - up   - y1, 0)
-            hy2 = min(hy2 - y1 + int(head_h * 0.3), crop.shape[0] - 1)
-            head_mask[hy1:hy2, hx1:hx2] = True
+        # fallback: если лицо не найдено, старый способ (линия плеч – но ЛОКАЛЬНО)
+        shldr_idx = [5, 6]
+        shldr_pts = keypts[shldr_idx]
+        valid_sh  = (shldr_pts[:, 0] > 0) & (shldr_pts[:, 1] > 0)
+        if valid_sh.any():
+            y_sh = int(shldr_pts[valid_sh, 1].mean()) - y1
+            margin = int(0.05 * body_mask.shape[0])
+            head_mask[:max(y_sh - margin, 0), :] = True
 
     # ──────────────────────────────────────────────────────────────────────
     # 4.  Dilate -> Subtract -> Final mask
