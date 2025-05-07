@@ -24,7 +24,8 @@ def _upload_to_s3(image_data: bytes | str, *, source_type: str = "base64") -> st
     s3_secret_key = os.getenv("S3_SECRET_KEY")
     s3_endpoint   = os.getenv("S3_ENDPOINT_URL")
     s3_bucket     = os.getenv("S3_BUCKET_NAME")
-    if not all([s3_access_key, s3_secret_key, s3_endpoint, s3_bucket]):
+    s3_region_name = os.getenv("S3_REGION_NAME")
+    if not all([s3_access_key, s3_secret_key, s3_endpoint, s3_bucket, s3_region_name]):
         raise ValueError("Missing S3 env vars")
 
     if source_type == "base64":
@@ -47,6 +48,8 @@ def _upload_to_s3(image_data: bytes | str, *, source_type: str = "base64") -> st
         aws_access_key_id=s3_access_key,
         aws_secret_access_key=s3_secret_key,
         endpoint_url=s3_endpoint,
+        region_name=s3_region_name,
+        config=boto3.session.Config(signature_version="s3"),
     )
     s3.put_object(Body=img_bytes, Bucket=s3_bucket,
                   Key=key, ACL="public-read", ContentType="image/jpeg")
