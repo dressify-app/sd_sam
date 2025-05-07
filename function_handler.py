@@ -55,7 +55,7 @@ def _upload_to_s3(image_data: bytes | str, *, source_type: str = "base64") -> st
 # ──────────────────────────────────────────────────────────────────────
 #  Models
 # ──────────────────────────────────────────────────────────────────────
-device = "cuda"
+device = "cuda" if torch.cuda.is_available() else "cpu"
 yolo_pose = YOLO("yolov8x-pose.pt")
 yolo_pose.model.to(device).eval()
 try: yolo_pose.fuse()
