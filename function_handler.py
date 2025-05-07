@@ -84,7 +84,7 @@ def _b64_to_cv2(b64: str) -> np.ndarray:
     return cv2.imdecode(np.frombuffer(base64.b64decode(b64), np.uint8),
                         cv2.IMREAD_COLOR)
 
-def _get_pose_keypoints(img_b64: str) -> tuple[np.ndarray, np.ndarray]:
+def _get_pose_keypoints(img_b64: str, img_bgr: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Получает ключевые точки позы используя ControlNet OpenPose."""
     try:
         response = requests.post(
@@ -125,24 +125,35 @@ def _get_pose_keypoints(img_b64: str) -> tuple[np.ndarray, np.ndarray]:
         main_contour = max(contours, key=cv2.contourArea)
         
         # Получаем ограничивающий прямоугольник
+        # Размер карты, на которой работал ControlNet
+        if "poses" in result and result["poses"]:
+            canvas_w = result["poses"][0].get("canvas_width", pose_map.shape[1])
+            canvas_h = result["poses"][0].get("canvas_height", pose_map.shape[0])
+        else:
+            canvas_w, canvas_h = pose_map.shape[1], pose_map.shape[0]
+
+        # Масштабы в размер оригинального изображения
+        orig_h, orig_w = img_bgr.shape[:2]          # <-- передайте сюда img_bgr
+        sx, sy = orig_w / canvas_w, orig_h / canvas_h
+
+        # bounding box из контура
         x, y, w, h = cv2.boundingRect(main_contour)
-        box_xyxy = np.array([x, y, x + w, y + h])
+        box_xyxy = np.array([x * sx, y * sy, (x + w) * sx, (y + h) * sy]).astype(int)
         
-        # Находим ключевые точки (локальные максимумы)
-        keypoints = []
-        for i in range(17):  # 17 ключевых точек в OpenPose
-            # Создаем маску для текущей ключевой точки
-            mask = np.zeros_like(gray)
-            cv2.drawContours(mask, [main_contour], -1, 255, -1)
-            
-            # Находим локальный максимум в области контура
-            local_max = cv2.minMaxLoc(gray, mask=mask)
-            if local_max[1] > 0:  # Если нашли максимум
-                keypoints.append([local_max[3][0], local_max[3][1]])
-            else:
-                keypoints.append([0, 0])  # Если точка не найдена
-        
-        return np.array(keypoints), box_xyxy
+        # Сначала пробуем взять готовые keypoints из JSON
+        if "poses" in result and result["poses"]:
+            kp_raw = result["poses"][0]["people"][0]["pose_keypoints_2d"]
+            keypoints = np.array(kp_raw, dtype=np.float32).reshape(-1, 3)[:, :2]
+            keypoints[:, 0] *= sx
+            keypoints[:, 1] *= sy
+        else:
+            # fallback – максимумы по PNG (как было)
+            keypoints = []
+            for _ in range(17):
+                ...
+            keypoints = np.array(keypoints, dtype=np.float32)
+
+        return keypoints.astype(int), box_xyxy
         
     except requests.exceptions.RequestException as e:
         raise ValueError(f"ControlNet request failed: {str(e)}")
@@ -159,7 +170,7 @@ def generate_body_mask(img_b64: str, dilate_size: int = 0) -> tuple[str, dict]:
 
     # 1. Detect person + keypoints using ControlNet OpenPose -------------------------------------------------
     try:
-        keypts, box_xyxy = _get_pose_keypoints(img_b64)
+        keypts, box_xyxy = _get_pose_keypoints(img_b64, img_bgr)
     except Exception as e:
         raise ValueError(f"Failed to detect pose: {e}")
 
