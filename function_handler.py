@@ -143,30 +143,34 @@ def generate_body_mask(img_b64: str) -> tuple[str, dict]:
         shoes_mask[sy1:, :] = True
 
     # 4. head+hair  -------------------------------------------------------
-    head_mask = np.zeros_like(body_mask, dtype=np.uint8)
-
-    head_idx   = [0,1,2,3,4]
-    head_pts   = keypts[head_idx]
-    valid_head = (head_pts[:,0] > 0) & (head_pts[:,1] > 0)
+    head_mask_uint = np.zeros(crop.shape[:2], dtype=np.uint8, order="C").copy()
+    head_idx = [0, 1, 2, 3, 4]
+    head_pts = keypts[head_idx]
+    valid_head = (head_pts[:, 0] > 0) & (head_pts[:, 1] > 0)
 
     if valid_head.any():
         hp = head_pts[valid_head]
-        x_min, y_min = hp.min(axis=0); x_max, y_max = hp.max(axis=0)
-        cx = int((x_min + x_max)/2) - x1
-        cy = int((y_min + y_max)/2) - y1
-        head_h = y_max - y_min; head_w = x_max - x_min
+        xmin, ymin = hp.min(axis=0)
+        xmax, ymax = hp.max(axis=0)
+        cx = int((xmin + xmax) / 2) - x1
+        cy = int((ymin + ymax) / 2) - y1
+        head_h = ymax - ymin
+        head_w = xmax - xmin
         radius = int(max(head_h, head_w) * 0.9)
-        cy -= int(head_h * 0.25)          # смещаем вверх
-        cv2.circle(head_mask, (cx, cy), radius, 1, thickness=-1)
+        cy -= int(head_h * 0.25)
+        # draw filled circle
+        cv2.circle(head_mask_uint, (cx, cy), radius, 1, thickness=-1)
     else:
-        sh_idx = [5,6]; sh_pts = keypts[sh_idx]
-        valid_sh = (sh_pts[:,0]>0)&(sh_pts[:,1]>0)
+        # fallback: very local shoulder cut (only if absolutely needed)
+        sh_idx = [5, 6]
+        sh_pts = keypts[sh_idx]
+        valid_sh = (sh_pts[:, 0] > 0) & (sh_pts[:, 1] > 0)
         if valid_sh.any():
-            y_sh = int(sh_pts[valid_sh,1].mean()) - y1
-            margin = int(0.05*body_mask.shape[0])
-            head_mask[:max(y_sh-margin,0),:] = 1
-    head_mask = head_mask.astype(bool)
+            y_sh = int(sh_pts[valid_sh, 1].mean()) - y1
+            margin = int(0.05 * body_mask.shape[0])
+            head_mask_uint[:max(y_sh - margin, 0), :] = 1
 
+    head_mask = head_mask_uint.astype(bool)
     # 5. final ------------------------------------------------------------
     body_dil = cv2.dilate(body_mask.astype(np.uint8),
                           np.ones((13,13),np.uint8), 2).astype(bool)
