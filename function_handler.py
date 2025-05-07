@@ -1,115 +1,87 @@
 import runpod
-import os
-import requests
-import base64
-import time
-import uuid
-import io
+import os, requests, base64, time, uuid, io
 from PIL import Image
 import numpy as np
-import torch
-import cv2
-from ultralytics import YOLO               # yolov8‑pose
-from segment_anything import (             # стандартный SAM
-    sam_model_registry,
-    SamAutomaticMaskGenerator,
-)
+import torch, cv2
+from ultralytics import YOLO
+from segment_anything import sam_model_registry, SamAutomaticMaskGenerator
 
 os.environ["ULTRALYTICS_SKIP_VALIDATE"] = "1"
 
 try:
     from fastapi import FastAPI, Body
     import uvicorn
-except ImportError:                         # локальный режим может быть без этих пакетов
-    FastAPI = None                          # type: ignore
-    uvicorn = None                          # type: ignore
+except ImportError:
+    FastAPI = None
+    uvicorn = None
 
-# ============================================================
-# helpers: S3 upload + base64 utilities
-# ============================================================
-
+# ──────────────────────────────────────────────────────────────────────
+#  helpers: upload to S3
+# ──────────────────────────────────────────────────────────────────────
 def _upload_to_s3(image_data: bytes | str, *, source_type: str = "base64") -> str:
-    """Upload image/mask bytes to S3 and return public URL."""
     import boto3
-
     s3_access_key = os.getenv("S3_ACCESS_KEY")
     s3_secret_key = os.getenv("S3_SECRET_KEY")
-    s3_endpoint_url = os.getenv("S3_ENDPOINT_URL")
-    s3_region_name = os.getenv("S3_REGION_NAME", "us-east-1")
-    s3_bucket_name = os.getenv("S3_BUCKET_NAME")
-    if not all([s3_access_key, s3_secret_key, s3_endpoint_url, s3_bucket_name]):
+    s3_endpoint   = os.getenv("S3_ENDPOINT_URL")
+    s3_bucket     = os.getenv("S3_BUCKET_NAME")
+    if not all([s3_access_key, s3_secret_key, s3_endpoint, s3_bucket]):
         raise ValueError("Missing S3 env vars")
 
-    # decode / normalise
     if source_type == "base64":
         if isinstance(image_data, str):
             if image_data.startswith("data:image"):
                 image_data = image_data.split(",", 1)[1]
             img_bytes = base64.b64decode(image_data)
         else:
-            raise ValueError("Base64 image data must be str")
-    elif source_type == "bytes":
-        img_bytes = image_data  # type: ignore[arg-type]
+            raise ValueError("base64 must be str")
     else:
-        raise ValueError("source_type must be 'base64' or 'bytes'")
+        img_bytes = image_data               # bytes
 
-    # force JPEG for size
     img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
-    buf = io.BytesIO()
-    img.save(buf, format="JPEG", quality=95)
+    buf = io.BytesIO(); img.save(buf, "JPEG", quality=95)
     img_bytes = buf.getvalue()
 
-    ts = int(time.time())
-    fid = uuid.uuid4().hex
-    key_path = f"photo_out/generated/{fid}/{ts}.jpg"
-
-    session = boto3.session.Session()
-    s3 = session.client(
+    key = f"photo_out/generated/{uuid.uuid4().hex}/{int(time.time())}.jpg"
+    s3 = boto3.client(
         "s3",
         aws_access_key_id=s3_access_key,
         aws_secret_access_key=s3_secret_key,
-        endpoint_url=s3_endpoint_url,
-        region_name=s3_region_name,
-        config=boto3.session.Config(signature_version="s3"),
+        endpoint_url=s3_endpoint,
     )
-    s3.put_object(
-        Body=img_bytes,
-        Bucket=s3_bucket_name,
-        Key=key_path,
-        ACL="public-read",
-        ContentType="image/jpeg",
-    )
-    return f"{s3_endpoint_url.rstrip('/')}/{s3_bucket_name}/{key_path}"
+    s3.put_object(Body=img_bytes, Bucket=s3_bucket,
+                  Key=key, ACL="public-read", ContentType="image/jpeg")
+    return f"{s3_endpoint.rstrip('/')}/{s3_bucket}/{key}"
 
-# ============================================================
-# Fast body‑mask pipeline: YOLOv8‑pose + Segment‑Anything
-# ============================================================
+# ──────────────────────────────────────────────────────────────────────
+#  Models
+# ──────────────────────────────────────────────────────────────────────
+device = "cuda"
+yolo_pose = YOLO("yolov8x-pose.pt")
+yolo_pose.model.to(device).eval()
+try: yolo_pose.fuse()
+except: pass
 
-device = "cuda"  # или "cpu"
-
-yolo_pose = YOLO("yolov8x-pose.pt")  # <- загрузка уже включает веса
-yolo_pose.model.to(device).eval()    # переносим **внутреннюю** модель и ставим eval
-try:
-    yolo_pose.fuse()                 # ~10 % speed‑up
-except Exception:
-    pass
-
-# --- SAM ----------------------------------------------------------------
-sam_ckpt = os.getenv("SAM_CKPT", "sam_vit_b_01ec64.pth")  # vit‑b по‑умолчанию
+sam_ckpt = os.getenv("SAM_CKPT", "sam_vit_b_01ec64.pth")
 sam_model = sam_model_registry["vit_b"](checkpoint=sam_ckpt).to(device).eval()
-mask_gen = SamAutomaticMaskGenerator(
+mask_gen  = SamAutomaticMaskGenerator(
     sam_model,
-    points_per_side=16,
+    points_per_side=32,                 # чуть плотнее
     pred_iou_thresh=0.86,
     stability_score_thresh=0.92,
 )
 
-def _b64_to_cv2(img_b64: str) -> np.ndarray:
-    if img_b64.startswith("data:image"):
-        img_b64 = img_b64.split(",", 1)[1]
-    return cv2.imdecode(np.frombuffer(base64.b64decode(img_b64), np.uint8), cv2.IMREAD_COLOR)
+# ──────────────────────────────────────────────────────────────────────
+#  utils
+# ──────────────────────────────────────────────────────────────────────
+def _b64_to_cv2(b64: str) -> np.ndarray:
+    if b64.startswith("data:image"):
+        b64 = b64.split(",", 1)[1]
+    return cv2.imdecode(np.frombuffer(base64.b64decode(b64), np.uint8),
+                        cv2.IMREAD_COLOR)
 
-
+# ──────────────────────────────────────────────────────────────────────
+#  main mask generator
+# ──────────────────────────────────────────────────────────────────────
 def generate_body_mask(img_b64: str) -> tuple[str, dict]:
     """Generates mask of entire body except head, hair & shoes; returns (S3 url, debug)."""
     img_bgr = _b64_to_cv2(img_b64)
@@ -119,46 +91,41 @@ def generate_body_mask(img_b64: str) -> tuple[str, dict]:
     pose = yolo_pose.predict(img_bgr, conf=0.25, iou=0.5, verbose=False, device=device)[0]
     if len(pose.boxes) == 0:
         raise ValueError("No person detected")
-    idx = int(torch.argmax(pose.boxes.conf))
-    box_xyxy = pose.boxes.xyxy[idx].cpu().numpy().astype(int)
-    keypts = pose.keypoints.xy[idx].cpu().numpy().astype(int)  # (17, 2)
+    idx       = int(torch.argmax(pose.boxes.conf))
+    box_xyxy  = pose.boxes.xyxy[idx].cpu().numpy().astype(int)
+    keypts    = pose.keypoints.xy[idx].cpu().numpy().astype(int)  # (17,2)
 
     x1, y1, x2, y2 = box_xyxy
-    crop = img_bgr[y1:y2, x1:x2]
+    crop   = img_bgr[y1:y2, x1:x2]
 
     # 2. SAM full‑body mask -------------------------------------------------
     masks = mask_gen.generate(crop)
-
     crop_h, crop_w = crop.shape[:2]
     crop_area = crop_h * crop_w
 
     # --- helper: проверяем, попадает ли хотя бы 4 ключ‑точки в маску -------
-    def _kp_covered(seg: np.ndarray, pts: np.ndarray, thresh: int = 4) -> bool:
+    def _kp_covered(seg: np.ndarray, pts: np.ndarray, thresh=4) -> bool:
         ok = 0
         for x, y in pts:
-            if x <= 0 or y <= 0:
-                continue
-            if y - y1 >= 0 and x - x1 >= 0 and y - y1 < seg.shape[0] and x - x1 < seg.shape[1]:
+            if x <= 0 or y <= 0: continue
+            if 0 <= y - y1 < seg.shape[0] and 0 <= x - x1 < seg.shape[1]:
                 ok += bool(seg[int(y - y1), int(x - x1)])
         return ok >= thresh
 
-    # 2a. собираем кандидатов: не > 80 % кропа и закрывают ≥4 ключ‑точки
-    candidates: list[np.ndarray] = []
+    candidates = []
     for m in masks:
         seg = m["segmentation"]
-        if m["area"] > crop_area * 0.80:      # почти весь кроп = фон → пропускаем
+        if m["area"] > crop_area * 0.80:  # отбрасываем почти‑фон
             continue
         if _kp_covered(seg, keypts):
             candidates.append(seg)
 
-    # 2b. если нашлось ≥1 кандидата → объединяем; иначе fallback: берём 2‑ю по площади
     if candidates:
         body_mask = np.zeros_like(candidates[0], dtype=bool)
-        for seg in candidates:
-            body_mask |= seg
+        for seg in candidates: body_mask |= seg
     else:
-        masks_sorted = sorted(masks, key=lambda m: m["area"], reverse=True)
-        body_mask = masks_sorted[1]["segmentation"] if len(masks_sorted) > 1 else masks_sorted[0]["segmentation"]
+        m_sorted = sorted(masks, key=lambda m: m["area"], reverse=True)
+        body_mask = m_sorted[1]["segmentation"] if len(m_sorted) > 1 else m_sorted[0]["segmentation"]
     body_mask = body_mask.astype(bool)
 
     # ──────────────────────────────────────────────────────────────────────
@@ -169,70 +136,53 @@ def generate_body_mask(img_b64: str) -> tuple[str, dict]:
     ank_idx = [15, 16]
     ank_pts = keypts[ank_idx]
     valid_ank = (ank_pts[:, 1] > 0)
-    shoes_mask = np.zeros_like(body_mask)
+    shoes_mask = np.zeros_like(body_mask, dtype=bool)
     if valid_ank.any():
-        ay = int(ank_pts[valid_ank, 1].max())
+        ay  = int(ank_pts[valid_ank, 1].max())
         sy1 = max(ay - y1, 0)
         shoes_mask[sy1:, :] = True
 
-    # 3b.  HEAD + HAIR  –‑ компактная окружность
-    head_idx   = [0, 1, 2, 3, 4]                   # nose + eyes + ears
-    head_pts   = keypts[head_idx]
-    valid_head = (head_pts[:, 0] > 0) & (head_pts[:, 1] > 0)
+    # 4. head+hair  -------------------------------------------------------
+    head_mask = np.zeros_like(body_mask, dtype=np.uint8)
 
-    head_mask = np.zeros_like(body_mask)
+    head_idx   = [0,1,2,3,4]
+    head_pts   = keypts[head_idx]
+    valid_head = (head_pts[:,0] > 0) & (head_pts[:,1] > 0)
 
     if valid_head.any():
         hp = head_pts[valid_head]
-        x_min, y_min = hp.min(axis=0)
-        x_max, y_max = hp.max(axis=0)
-
-        # центр головы в координатах кропа
-        cx = int((x_min + x_max) / 2) - x1
-        cy = int((y_min + y_max) / 2) - y1
-
-        head_h = y_max - y_min
-        head_w = x_max - x_min
-        radius = int(max(head_h, head_w) * 0.9)      # 0.9 ≈ чуть больше головы
-
-        # сдвигаем чуть вверх, чтобы захватить волосы / шапки
-        cy -= int(head_h * 0.25)
-
+        x_min, y_min = hp.min(axis=0); x_max, y_max = hp.max(axis=0)
+        cx = int((x_min + x_max)/2) - x1
+        cy = int((y_min + y_max)/2) - y1
+        head_h = y_max - y_min; head_w = x_max - x_min
+        radius = int(max(head_h, head_w) * 0.9)
+        cy -= int(head_h * 0.25)          # смещаем вверх
         cv2.circle(head_mask, (cx, cy), radius, 1, thickness=-1)
     else:
-        # fallback: если лицо не найдено, старый способ (линия плеч – но ЛОКАЛЬНО)
-        shldr_idx = [5, 6]
-        shldr_pts = keypts[shldr_idx]
-        valid_sh  = (shldr_pts[:, 0] > 0) & (shldr_pts[:, 1] > 0)
+        sh_idx = [5,6]; sh_pts = keypts[sh_idx]
+        valid_sh = (sh_pts[:,0]>0)&(sh_pts[:,1]>0)
         if valid_sh.any():
-            y_sh = int(shldr_pts[valid_sh, 1].mean()) - y1
-            margin = int(0.05 * body_mask.shape[0])
-            head_mask[:max(y_sh - margin, 0), :] = True
+            y_sh = int(sh_pts[valid_sh,1].mean()) - y1
+            margin = int(0.05*body_mask.shape[0])
+            head_mask[:max(y_sh-margin,0),:] = 1
+    head_mask = head_mask.astype(bool)
 
-    # ──────────────────────────────────────────────────────────────────────
-    # 4.  Dilate -> Subtract -> Final mask
-    # ──────────────────────────────────────────────────────────────────────
+    # 5. final ------------------------------------------------------------
     body_dil = cv2.dilate(body_mask.astype(np.uint8),
-                          np.ones((13, 13), np.uint8), 2).astype(bool)
-
+                          np.ones((13,13),np.uint8), 2).astype(bool)
     final_crop = np.logical_and(body_dil,
-                 np.logical_not(np.logical_or(head_mask, shoes_mask)))
+                    np.logical_not(np.logical_or(head_mask, shoes_mask)))
 
-    # ──────────────────────────────────────────────────────────────────────
-    # 5.  Вставляем в канву и отправляем в S3 (осталось как было)
-    # ──────────────────────────────────────────────────────────────────────
     full_mask = np.zeros((h, w), dtype=np.uint8)
     full_mask[y1:y2, x1:x2] = final_crop.astype(np.uint8) * 255
 
     _, png_bytes = cv2.imencode(".png", full_mask)
-    mask_url = _upload_to_s3(png_bytes.tobytes(), source_type="bytes")
+    url = _upload_to_s3(png_bytes.tobytes(), source_type="bytes")
 
-    debug = {
-        "bbox": box_xyxy.tolist(),
-        "shoulders_used": bool(valid_shld.any()),
-        "ankles_used":    bool(valid_ank.any()),
-    }
-    return mask_url, debug
+    dbg = {"bbox": box_xyxy.tolist(),
+           "head_used": bool(valid_head.any()),
+           "ankles_used": bool(valid_ank.any())}
+    return url, dbg
 
 # ============================================================
 # Proxy / request router
