@@ -192,7 +192,7 @@ def generate_body_mask(img_b64: str) -> tuple[str, dict]:
 
     # 5. Combine & refine ----------------------------------------------------------
     final_crop = np.logical_and(body_mask, np.logical_not(np.logical_or(head_mask, shoes_mask)))
-    final_crop = cv2.dilate(final_crop.astype(np.uint8), np.ones((9, 9), np.uint8), 2).astype(bool)
+    final_crop = cv2.dilate(final_crop.astype(np.uint8), np.ones((11, 11), np.uint8), 2).astype(bool)
 
     full_mask = np.zeros((h, w), dtype=np.uint8)
     full_mask[y1:y2, x1:x2] = final_crop.astype(np.uint8) * 255
