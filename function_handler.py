@@ -43,16 +43,23 @@ def _upload_to_s3(image_data: bytes | str, *, source_type: str = "base64") -> st
     img_bytes = buf.getvalue()
 
     key = f"photo_out/generated/{uuid.uuid4().hex}/{int(time.time())}.jpg"
-    s3 = boto3.client(
-        "s3",
+    session = boto3.session.Session()
+    s3_client = session.client(
+        's3',
         aws_access_key_id=s3_access_key,
         aws_secret_access_key=s3_secret_key,
         endpoint_url=s3_endpoint,
         region_name=s3_region_name,
         config=boto3.session.Config(signature_version="s3"),
     )
-    s3.put_object(Body=img_bytes, Bucket=s3_bucket,
-                  Key=key, ACL="public-read", ContentType="image/jpeg")
+    # Загрузка маски
+    s3_client.put_object(
+        Body=img_bytes,
+        Bucket=s3_bucket,
+        Key=key,
+        ACL='public-read',
+        ContentType='image/jpeg'
+    )
     return f"{s3_endpoint.rstrip('/')}/{s3_bucket}/{key}"
 
 # ──────────────────────────────────────────────────────────────────────
