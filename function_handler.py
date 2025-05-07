@@ -213,7 +213,7 @@ def generate_body_mask(img_b64: str) -> tuple[str, dict]:
     # 4.  Dilate -> Subtract -> Final mask
     # ──────────────────────────────────────────────────────────────────────
     body_dil = cv2.dilate(body_mask.astype(np.uint8),
-                          np.ones((11, 11), np.uint8), 2).astype(bool)
+                          np.ones((13, 13), np.uint8), 2).astype(bool)
 
     final_crop = np.logical_and(body_dil,
                  np.logical_not(np.logical_or(head_mask, shoes_mask)))
