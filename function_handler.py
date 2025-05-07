@@ -3,7 +3,6 @@ import os, requests, base64, time, uuid, io
 from PIL import Image
 import numpy as np
 import torch, cv2
-from ultralytics import YOLO
 from segment_anything import sam_model_registry, SamAutomaticMaskGenerator
 
 os.environ["ULTRALYTICS_SKIP_VALIDATE"] = "1"
