@@ -183,7 +183,7 @@ def generate_body_mask(img_b64: str) -> tuple[str, dict]:
     head_mask = head_mask_uint.astype(bool)
     # 5. final ------------------------------------------------------------
     body_dil = cv2.dilate(body_mask.astype(np.uint8),
-                          np.ones((13,13),np.uint8), 2).astype(bool)
+                          np.ones((15,15),np.uint8), 2).astype(bool)
     final_crop = np.logical_and(body_dil,
                     np.logical_not(np.logical_or(head_mask, shoes_mask)))
 
@@ -333,6 +333,76 @@ def process_request(job: dict):
                 except Exception as e:
                     return {"error": f"Failed to fetch element of '{key}': {e}"}
             params[key] = new_list
+
+    # Добавляем ControlNet для txt2img и img2img
+    if path in ["sdapi/v1/txt2img", "sdapi/v1/img2img"]:
+        # Получаем исходное изображение
+        input_image = params.get("init_images", [None])[0] if path == "sdapi/v1/img2img" else None
+        
+        if input_image:
+            # Создаем ControlNet units для глубины и позы
+            controlnet_units = []
+            
+            # Depth ControlNet
+            depth_response = requests.post(
+                "http://127.0.0.1:7860/controlnet/detect",
+                json={
+                    "controlnet_module": "depth",
+                    "controlnet_input_images": [input_image]
+                }
+            )
+            if depth_response.ok:
+                depth_result = depth_response.json()
+                if "depth_maps" in depth_result:
+                    controlnet_units.append({
+                        "input_image": depth_result["depth_maps"][0],
+                        "module": "depth",
+                        "model": "control_v11f1p_sd15_depth",
+                        "weight": 0.8,
+                        "resize_mode": "Resize and Fill",
+                        "lowvram": False,
+                        "processor_res": 512,
+                        "threshold_a": 64,
+                        "threshold_b": 64,
+                        "guidance_start": 0.0,
+                        "guidance_end": 1.0,
+                        "control_mode": "Balanced"
+                    })
+            
+            # Pose ControlNet
+            pose_response = requests.post(
+                "http://127.0.0.1:7860/controlnet/detect",
+                json={
+                    "controlnet_module": "openpose",
+                    "controlnet_input_images": [input_image]
+                }
+            )
+            if pose_response.ok:
+                pose_result = pose_response.json()
+                if "pose_maps" in pose_result:
+                    controlnet_units.append({
+                        "input_image": pose_result["pose_maps"][0],
+                        "module": "openpose",
+                        "model": "control_v11p_sd15_pose",
+                        "weight": 0.8,
+                        "resize_mode": "Resize and Fill",
+                        "lowvram": False,
+                        "processor_res": 512,
+                        "threshold_a": 64,
+                        "threshold_b": 64,
+                        "guidance_start": 0.0,
+                        "guidance_end": 1.0,
+                        "control_mode": "Balanced"
+                    })
+            
+            # Добавляем ControlNet units в параметры
+            if controlnet_units:
+                params["alwayson_scripts"] = {
+                    "controlnet": {
+                        "args": controlnet_units
+                    }
+                }
+
     # Build local URL
     local_url = f"http://127.0.0.1:7860/{path.lstrip('/')}"
     try:
@@ -347,6 +417,9 @@ def process_request(job: dict):
         elif 'sam' in path:
             # Обработка результатов SAM API
             result = _process_sam_results(result)
+        elif 'controlnet' in path:
+            # Обработка результатов ControlNet API
+            result = _process_sd_results(result)
         
         return result
     except Exception as e:

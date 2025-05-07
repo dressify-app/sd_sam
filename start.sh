@@ -22,11 +22,15 @@ echo "Starting Stable‑Diffusion WebUI (API only)…"
 export COMMANDLINE_ARGS="\
   --api --listen --port 7860 \
   --xformers \
-  --skip-version-check --skip-torch-cuda-test \
+  --no-half-vae \
+  --enable-insecure-extension-access \
+  --skip-version-check --skip-torch-cuda-test --skip-python-version-check \
   --no-hashing --disable-safe-unpickle \
   --disable-console-progressbars \
   --ckpt /app/models/Stable-diffusion/v1-5-pruned-emaonly.safetensors \
-  --no-download-sd-model"
+  --no-download-sd-model \
+  --controlnet-dir /app/extensions/sd-webui-controlnet/models \
+  --controlnet-annotator-models-path /app/extensions/sd-webui-controlnet/annotator/downloads"
 python launch.py $COMMANDLINE_ARGS > /tmp/webui.log 2>&1 &
 
 WEBUI_PID=$!

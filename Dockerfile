@@ -1,5 +1,5 @@
 # ======================================================================
-#  BASE IMAGE  –  PyTorch 2.0.1 + CUDA 11.7 + cuDNN 8
+#  BASE IMAGE  –  PyTorch 2.0.1 + CUDA 11.7 + cuDNN 8
 # ======================================================================
 FROM pytorch/pytorch:2.0.1-cuda11.7-cudnn8-devel
 
@@ -33,6 +33,26 @@ RUN curl -L https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth
 RUN mkdir -p models/Stable-diffusion && \
     curl -L https://huggingface.co/runwayml/stable-diffusion-v1-5/resolve/main/v1-5-pruned-emaonly.safetensors \
         -o models/Stable-diffusion/v1-5-pruned-emaonly.safetensors
+
+# ----------------------------------------------------------------------
+#  INSTALL CONTROLNET
+# ----------------------------------------------------------------------
+RUN mkdir -p extensions && \
+    git clone https://github.com/Mikubill/sd-webui-controlnet.git extensions/sd-webui-controlnet && \
+    pip install -r extensions/sd-webui-controlnet/requirements.txt
+
+# Download ControlNet models
+RUN mkdir -p extensions/sd-webui-controlnet/models && \
+    curl -L https://huggingface.co/lllyasviel/ControlNet-v1-1/resolve/main/control_v11p_sd15_canny.pth \
+        -o extensions/sd-webui-controlnet/models/control_v11p_sd15_canny.pth && \
+    curl -L https://huggingface.co/lllyasviel/ControlNet-v1-1/resolve/main/control_v11p_sd15_openpose.pth \
+        -o extensions/sd-webui-controlnet/models/control_v11p_sd15_openpose.pth && \
+    curl -L https://huggingface.co/lllyasviel/ControlNet-v1-1/resolve/main/control_v11p_sd15_softedge.pth \
+        -o extensions/sd-webui-controlnet/models/control_v11p_sd15_softedge.pth && \
+    curl -L https://huggingface.co/lllyasviel/ControlNet-v1-1/resolve/main/control_v11f1p_sd15_depth.pth \
+        -o extensions/sd-webui-controlnet/models/control_v11f1p_sd15_depth.pth && \
+    curl -L https://huggingface.co/lllyasviel/ControlNet-v1-1/resolve/main/control_v11p_sd15_pose.pth \
+        -o extensions/sd-webui-controlnet/models/control_v11p_sd15_pose.pth
 
 # ----------------------------------------------------------------------
 #  PYTHON DEPS
