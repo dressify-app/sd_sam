@@ -90,7 +90,7 @@ device = "cuda"  # или "cpu"
 yolo_pose = YOLO("yolov8x-pose.pt")  # <- загрузка уже включает веса
 yolo_pose.model.to(device).eval()    # переносим **внутреннюю** модель и ставим eval
 try:
-    yolo_pose.fuse()                 # ~10 % speed‑up
+    yolo_pose.fuse()                 # ~10 % speed‑up
 except Exception:
     pass
 
@@ -132,7 +132,7 @@ def generate_body_mask(img_b64: str) -> tuple[str, dict]:
     crop_h, crop_w = crop.shape[:2]
     crop_area = crop_h * crop_w
 
-# --- helper: проверяем, попадает ли хотя бы 4 ключ‑точки в маску -------
+    # --- helper: проверяем, попадает ли хотя бы 4 ключ‑точки в маску -------
     def _kp_covered(seg: np.ndarray, pts: np.ndarray, thresh: int = 4) -> bool:
         ok = 0
         for x, y in pts:
@@ -142,16 +142,16 @@ def generate_body_mask(img_b64: str) -> tuple[str, dict]:
                 ok += bool(seg[int(y - y1), int(x - x1)])
         return ok >= thresh
 
-    # 2a. собираем кандидатов: не > 80 % кропа и закрывают ≥4 ключ‑точки
+    # 2a. собираем кандидатов: не > 80 % кропа и закрывают ≥4 ключ‑точки
     candidates: list[np.ndarray] = []
     for m in masks:
         seg = m["segmentation"]
-        if m["area"] > crop_area * 0.80:      # почти весь кроп = фон → пропускаем
+        if m["area"] > crop_area * 0.80:      # почти весь кроп = фон → пропускаем
             continue
         if _kp_covered(seg, keypts):
             candidates.append(seg)
 
-    # 2b. если нашлось ≥1 кандидата → объединяем; иначе fallback: берём 2‑ю по площади
+    # 2b. если нашлось ≥1 кандидата → объединяем; иначе fallback: берём 2‑ю по площади
     if candidates:
         body_mask = np.zeros_like(candidates[0], dtype=bool)
         for seg in candidates:
@@ -161,26 +161,11 @@ def generate_body_mask(img_b64: str) -> tuple[str, dict]:
         body_mask = masks_sorted[1]["segmentation"] if len(masks_sorted) > 1 else masks_sorted[0]["segmentation"]
     body_mask = body_mask.astype(bool)
 
-    # 3. Build head+hair mask ------------------------------------------------------
-    head_idx = [0, 1, 2, 3, 4]  # nose, eyes, ears
-    head_pts = keypts[head_idx]
-    valid_head = (head_pts[:, 0] > 0) & (head_pts[:, 1] > 0)
-    head_mask = np.zeros_like(body_mask)
-    if valid_head.any():
-        hp = head_pts[valid_head]
-        hx1, hy1 = hp.min(axis=0)
-        hx2, hy2 = hp.max(axis=0)
-        head_h = max(hy2 - hy1, 1)
-        up_margin   = int(head_h * 1.5)
-        side_margin = int(head_h * 0.3)
+    # ──────────────────────────────────────────────────────────────────────
+    # 3.  Строим маску "запретных" зон: head+hair и shoes
+    # ──────────────────────────────────────────────────────────────────────
 
-        hx1 = max(hx1 - side_margin - x1, 0)
-        hx2 = min(hx2 - x1 + side_margin, crop.shape[1] - 1)
-        hy1 = max(hy1 - up_margin - y1, 0)
-        hy2 = min(hy2 - y1 + int(head_h * 0.3), crop.shape[0] - 1)
-        head_mask[hy1:hy2, hx1:hx2] = True
-
-    # 4. Build shoes mask ----------------------------------------------------------
+    # 3a.  SHOES  – как было
     ank_idx = [15, 16]
     ank_pts = keypts[ank_idx]
     valid_ank = (ank_pts[:, 1] > 0)
@@ -190,10 +175,52 @@ def generate_body_mask(img_b64: str) -> tuple[str, dict]:
         sy1 = max(ay - y1, 0)
         shoes_mask[sy1:, :] = True
 
-    # 5. Combine & refine ----------------------------------------------------------
-    final_crop = np.logical_and(body_mask, np.logical_not(np.logical_or(head_mask, shoes_mask)))
-    final_crop = cv2.dilate(final_crop.astype(np.uint8), np.ones((11, 11), np.uint8), 2).astype(bool)
+    # 3b.  HEAD + HAIR  через линию плеч
+    shldr_idx  = [5, 6]                     # COCO: L/R shoulder
+    shldr_pts  = keypts[shldr_idx]
+    valid_shld = (shldr_pts[:, 1] > 0) & (shldr_pts[:, 0] > 0)
 
+    head_mask = np.zeros_like(body_mask)
+
+    if valid_shld.any():
+        # средняя высота плеч относительно кропа
+        y_shldr = int(shldr_pts[valid_shld, 1].mean()) - y1
+
+        # запас: +8 % высоты туловища (для воротников, шарфов)
+        margin  = int(0.08 * body_mask.shape[0])
+        cut_y   = max(y_shldr - margin, 0)
+
+        head_mask[:cut_y, :] = True                # всё выше линии плеч → True
+    else:
+        # резервный вариант, если плеч не нашли: нос/глаза (как раньше)
+        head_idx = [0, 1, 2, 3, 4]
+        head_pts = keypts[head_idx]
+        valid_head = (head_pts[:, 0] > 0) & (head_pts[:, 1] > 0)
+        if valid_head.any():
+            hp = head_pts[valid_head]
+            hx1, hy1 = hp.min(axis=0);  hx2, hy2 = hp.max(axis=0)
+            head_h   = max(hy2 - hy1, 1)
+            up       = int(head_h * 1.5)
+            side     = int(head_h * 0.3)
+
+            hx1 = max(hx1 - side - x1, 0)
+            hx2 = min(hx2 - x1 + side, crop.shape[1] - 1)
+            hy1 = max(hy1 - up   - y1, 0)
+            hy2 = min(hy2 - y1 + int(head_h * 0.3), crop.shape[0] - 1)
+            head_mask[hy1:hy2, hx1:hx2] = True
+
+    # ──────────────────────────────────────────────────────────────────────
+    # 4.  Dilate -> Subtract -> Final mask
+    # ──────────────────────────────────────────────────────────────────────
+    body_dil = cv2.dilate(body_mask.astype(np.uint8),
+                          np.ones((11, 11), np.uint8), 2).astype(bool)
+
+    final_crop = np.logical_and(body_dil,
+                 np.logical_not(np.logical_or(head_mask, shoes_mask)))
+
+    # ──────────────────────────────────────────────────────────────────────
+    # 5.  Вставляем в канву и отправляем в S3 (осталось как было)
+    # ──────────────────────────────────────────────────────────────────────
     full_mask = np.zeros((h, w), dtype=np.uint8)
     full_mask[y1:y2, x1:x2] = final_crop.astype(np.uint8) * 255
 
@@ -202,8 +229,8 @@ def generate_body_mask(img_b64: str) -> tuple[str, dict]:
 
     debug = {
         "bbox": box_xyxy.tolist(),
-        "head_used": bool(valid_head.any()),
-        "ankles_used": bool(valid_ank.any()),
+        "shoulders_used": bool(valid_shld.any()),
+        "ankles_used":    bool(valid_ank.any()),
     }
     return mask_url, debug
 
