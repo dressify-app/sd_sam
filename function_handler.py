@@ -101,14 +101,14 @@ def _get_pose_keypoints(img_b64: str) -> tuple[np.ndarray, np.ndarray]:
         if not isinstance(result, dict):
             raise ValueError(f"Invalid response format: {result}")
             
-        if "pose_maps" not in result:
+        if "images" not in result:
             raise ValueError(f"No pose maps in response. Full response: {result}")
             
-        if not result["pose_maps"] or not isinstance(result["pose_maps"], list):
+        if not result["images"] or not isinstance(result["images"], list):
             raise ValueError(f"Empty pose maps in response: {result}")
             
         # Получаем карту позы
-        pose_map = _b64_to_cv2(result["pose_maps"][0])
+        pose_map = _b64_to_cv2(result["images"][0])
         if pose_map is None or pose_map.size == 0:
             raise ValueError("Failed to decode pose map image")
         
@@ -444,9 +444,9 @@ def process_request(job: dict):
             )
             if pose_response.ok:
                 pose_result = pose_response.json()
-                if "pose_maps" in pose_result:
+                if "images" in pose_result:
                     controlnet_units.append({
-                        "input_image": pose_result["pose_maps"][0],
+                        "input_image": pose_result["images"][0],
                         "module": "openpose",
                         "model": "control_v11p_sd15_pose",
                         "weight": 0.8,
