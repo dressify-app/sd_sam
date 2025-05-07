@@ -23,9 +23,6 @@ RUN git clone https://github.com/AUTOMATIC1111/stable-diffusion-webui.git .
 # ----------------------------------------------------------------------
 #  DOWNLOAD WEIGHTS
 # ----------------------------------------------------------------------
-# YOLOv8‑pose
-RUN curl -L https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8x-pose.pt \
-        -o /app/yolov8x-pose.pt
 # Segment‑Anything (ViT‑B)
 RUN curl -L https://dl.fbaipublicfiles.com/segment_anything/sam_vit_b_01ec64.pth \
         -o /app/sam_vit_b_01ec64.pth
@@ -58,7 +55,6 @@ RUN mkdir -p extensions/sd-webui-controlnet/models && \
 #  PYTHON DEPS
 # ----------------------------------------------------------------------
 RUN pip install --no-cache-dir \
-        ultralytics==8.2.0 \
         git+https://github.com/facebookresearch/segment-anything.git \
         opencv-python-headless \
         pillow torchvision \

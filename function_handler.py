@@ -66,10 +66,6 @@ def _upload_to_s3(image_data: bytes | str, *, source_type: str = "base64") -> st
 #  Models
 # ──────────────────────────────────────────────────────────────────────
 device = "cuda" if torch.cuda.is_available() else "cpu"
-yolo_pose = YOLO("yolov8x-pose.pt")
-yolo_pose.model.to(device).eval()
-try: yolo_pose.fuse()
-except: pass
 
 sam_ckpt = os.getenv("SAM_CKPT", "sam_vit_b_01ec64.pth")
 sam_model = sam_model_registry["vit_b"](checkpoint=sam_ckpt).to(device).eval()
@@ -89,6 +85,57 @@ def _b64_to_cv2(b64: str) -> np.ndarray:
     return cv2.imdecode(np.frombuffer(base64.b64decode(b64), np.uint8),
                         cv2.IMREAD_COLOR)
 
+def _get_pose_keypoints(img_b64: str) -> tuple[np.ndarray, np.ndarray]:
+    """Получает ключевые точки позы используя ControlNet OpenPose."""
+    response = requests.post(
+        "http://127.0.0.1:7860/controlnet/detect",
+        json={
+            "controlnet_module": "openpose",
+            "controlnet_input_images": [img_b64]
+        }
+    )
+    if not response.ok:
+        raise ValueError("Failed to get pose keypoints")
+    
+    result = response.json()
+    if "pose_maps" not in result:
+        raise ValueError("No pose maps in response")
+    
+    # Получаем карту позы
+    pose_map = _b64_to_cv2(result["pose_maps"][0])
+    
+    # Конвертируем в градации серого для поиска ключевых точек
+    gray = cv2.cvtColor(pose_map, cv2.COLOR_BGR2GRAY)
+    
+    # Находим контуры
+    contours, _ = cv2.findContours(gray, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    if not contours:
+        raise ValueError("No contours found in pose map")
+    
+    # Берем самый большой контур
+    main_contour = max(contours, key=cv2.contourArea)
+    
+    # Получаем ограничивающий прямоугольник
+    x, y, w, h = cv2.boundingRect(main_contour)
+    box_xyxy = np.array([x, y, x + w, y + h])
+    
+    # Находим ключевые точки (локальные максимумы)
+    keypoints = []
+    for i in range(17):  # 17 ключевых точек в OpenPose
+        # Создаем маску для текущей ключевой точки
+        mask = np.zeros_like(gray)
+        cv2.drawContours(mask, [main_contour], -1, 255, -1)
+        
+        # Находим локальный максимум в области контура
+        local_max = cv2.minMaxLoc(gray, mask=mask)
+        if local_max[1] > 0:  # Если нашли максимум
+            keypoints.append([local_max[3][0], local_max[3][1]])
+        else:
+            keypoints.append([0, 0])  # Если точка не найдена
+    
+    return np.array(keypoints), box_xyxy
+
 # ──────────────────────────────────────────────────────────────────────
 #  main mask generator
 # ──────────────────────────────────────────────────────────────────────
@@ -97,16 +144,14 @@ def generate_body_mask(img_b64: str) -> tuple[str, dict]:
     img_bgr = _b64_to_cv2(img_b64)
     h, w = img_bgr.shape[:2]
 
-    # 1. Detect person + keypoints -------------------------------------------------
-    pose = yolo_pose.predict(img_bgr, conf=0.25, iou=0.5, verbose=False, device=device)[0]
-    if len(pose.boxes) == 0:
-        raise ValueError("No person detected")
-    idx       = int(torch.argmax(pose.boxes.conf))
-    box_xyxy  = pose.boxes.xyxy[idx].cpu().numpy().astype(int)
-    keypts    = pose.keypoints.xy[idx].cpu().numpy().astype(int)  # (17,2)
+    # 1. Detect person + keypoints using ControlNet OpenPose -------------------------------------------------
+    try:
+        keypts, box_xyxy = _get_pose_keypoints(img_b64)
+    except Exception as e:
+        raise ValueError(f"Failed to detect pose: {e}")
 
     x1, y1, x2, y2 = box_xyxy
-    crop   = img_bgr[y1:y2, x1:x2]
+    crop = img_bgr[y1:y2, x1:x2]
 
     # 2. SAM full‑body mask -------------------------------------------------
     masks = mask_gen.generate(crop)
@@ -143,7 +188,7 @@ def generate_body_mask(img_b64: str) -> tuple[str, dict]:
     # ──────────────────────────────────────────────────────────────────────
 
     # 3a.  SHOES  – как было
-    ank_idx = [15, 16]
+    ank_idx = [15, 16]  # Индексы лодыжек в OpenPose
     ank_pts = keypts[ank_idx]
     valid_ank = (ank_pts[:, 1] > 0)
     shoes_mask = np.zeros_like(body_mask, dtype=bool)
@@ -154,7 +199,7 @@ def generate_body_mask(img_b64: str) -> tuple[str, dict]:
 
     # 4. head+hair  -------------------------------------------------------
     head_mask_uint = np.zeros(crop.shape[:2], dtype=np.uint8, order="C").copy()
-    head_idx = [0, 1, 2, 3, 4]
+    head_idx = [0, 1, 2, 3, 4]  # Индексы точек головы в OpenPose
     head_pts = keypts[head_idx]
     valid_head = (head_pts[:, 0] > 0) & (head_pts[:, 1] > 0)
 
@@ -172,7 +217,7 @@ def generate_body_mask(img_b64: str) -> tuple[str, dict]:
         cv2.circle(head_mask_uint, (cx, cy), radius, 1, thickness=-1)
     else:
         # fallback: very local shoulder cut (only if absolutely needed)
-        sh_idx = [5, 6]
+        sh_idx = [5, 6]  # Индексы плеч в OpenPose
         sh_pts = keypts[sh_idx]
         valid_sh = (sh_pts[:, 0] > 0) & (sh_pts[:, 1] > 0)
         if valid_sh.any():

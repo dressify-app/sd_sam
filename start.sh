@@ -10,7 +10,7 @@ echo "CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"
 # ------------------------------------------------------------
 #  проверка весов
 # ------------------------------------------------------------
-for f in /app/yolov8x-pose.pt /app/sam_vit_b_01ec64.pth; do
+for f in /app/sam_vit_b_01ec64.pth; do
   [[ -f "$f" ]] || { echo "ERROR: weight $f not found!"; exit 1; }
 done
 echo "Model weights are present and verified."
@@ -22,8 +22,6 @@ echo "Starting Stable‑Diffusion WebUI (API only)…"
 export COMMANDLINE_ARGS="\
   --api --listen --port 7860 \
   --xformers \
-  --no-half-vae \
-  --enable-insecure-extension-access \
   --skip-version-check --skip-torch-cuda-test --skip-python-version-check \
   --no-hashing --disable-safe-unpickle \
   --disable-console-progressbars \
