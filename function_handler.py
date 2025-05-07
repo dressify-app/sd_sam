@@ -139,7 +139,7 @@ def _get_pose_keypoints(img_b64: str) -> tuple[np.ndarray, np.ndarray]:
 # ──────────────────────────────────────────────────────────────────────
 #  main mask generator
 # ──────────────────────────────────────────────────────────────────────
-def generate_body_mask(img_b64: str) -> tuple[str, dict]:
+def generate_body_mask(img_b64: str, dilate_size: int = 0) -> tuple[str, dict]:
     """Generates mask of entire body except head, hair & shoes; returns (S3 url, debug)."""
     img_bgr = _b64_to_cv2(img_b64)
     h, w = img_bgr.shape[:2]
@@ -232,6 +232,11 @@ def generate_body_mask(img_b64: str) -> tuple[str, dict]:
     final_crop = np.logical_and(body_dil,
                     np.logical_not(np.logical_or(head_mask, shoes_mask)))
 
+    # Применяем дилатацию если указан размер
+    if dilate_size > 0:
+        kernel = np.ones((dilate_size, dilate_size), np.uint8)
+        final_crop = cv2.dilate(final_crop.astype(np.uint8), kernel, iterations=1).astype(bool)
+
     full_mask = np.zeros((h, w), dtype=np.uint8)
     full_mask[y1:y2, x1:x2] = final_crop.astype(np.uint8) * 255
 
@@ -240,7 +245,8 @@ def generate_body_mask(img_b64: str) -> tuple[str, dict]:
 
     dbg = {"bbox": box_xyxy.tolist(),
            "head_used": bool(valid_head.any()),
-           "ankles_used": bool(valid_ank.any())}
+           "ankles_used": bool(valid_ank.any()),
+           "dilate_size": dilate_size}
     return url, dbg
 
 # ============================================================
@@ -345,7 +351,8 @@ def process_request(job: dict):
         else:
             img_b64 = img_src
         try:
-            url, dbg = generate_body_mask(img_b64)
+            dilate_size = int(params.get("dilate_size", 15))
+            url, dbg = generate_body_mask(img_b64, dilate_size)
             return {"result_url": url, "debug": dbg}
         except Exception as e:
             return {"error": str(e)}
