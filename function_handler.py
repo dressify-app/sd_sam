@@ -86,54 +86,68 @@ def _b64_to_cv2(b64: str) -> np.ndarray:
 
 def _get_pose_keypoints(img_b64: str) -> tuple[np.ndarray, np.ndarray]:
     """Получает ключевые точки позы используя ControlNet OpenPose."""
-    response = requests.post(
-        "http://127.0.0.1:7860/controlnet/detect",
-        json={
-            "controlnet_module": "openpose",
-            "controlnet_input_images": [img_b64]
-        }
-    )
-    if not response.ok:
-        raise ValueError("Failed to get pose keypoints")
-    
-    result = response.json()
-    if "pose_maps" not in result:
-        raise ValueError("No pose maps in response")
-    
-    # Получаем карту позы
-    pose_map = _b64_to_cv2(result["pose_maps"][0])
-    
-    # Конвертируем в градации серого для поиска ключевых точек
-    gray = cv2.cvtColor(pose_map, cv2.COLOR_BGR2GRAY)
-    
-    # Находим контуры
-    contours, _ = cv2.findContours(gray, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    
-    if not contours:
-        raise ValueError("No contours found in pose map")
-    
-    # Берем самый большой контур
-    main_contour = max(contours, key=cv2.contourArea)
-    
-    # Получаем ограничивающий прямоугольник
-    x, y, w, h = cv2.boundingRect(main_contour)
-    box_xyxy = np.array([x, y, x + w, y + h])
-    
-    # Находим ключевые точки (локальные максимумы)
-    keypoints = []
-    for i in range(17):  # 17 ключевых точек в OpenPose
-        # Создаем маску для текущей ключевой точки
-        mask = np.zeros_like(gray)
-        cv2.drawContours(mask, [main_contour], -1, 255, -1)
+    try:
+        response = requests.post(
+            "http://127.0.0.1:7860/controlnet/detect",
+            json={
+                "controlnet_module": "openpose",
+                "controlnet_input_images": [img_b64]
+            },
+            timeout=30  # увеличиваем таймаут
+        )
+        response.raise_for_status()  # проверяем HTTP ошибки
         
-        # Находим локальный максимум в области контура
-        local_max = cv2.minMaxLoc(gray, mask=mask)
-        if local_max[1] > 0:  # Если нашли максимум
-            keypoints.append([local_max[3][0], local_max[3][1]])
-        else:
-            keypoints.append([0, 0])  # Если точка не найдена
-    
-    return np.array(keypoints), box_xyxy
+        result = response.json()
+        if not isinstance(result, dict):
+            raise ValueError(f"Invalid response format: {result}")
+            
+        if "pose_maps" not in result:
+            raise ValueError(f"No pose maps in response. Full response: {result}")
+            
+        if not result["pose_maps"] or not isinstance(result["pose_maps"], list):
+            raise ValueError(f"Empty pose maps in response: {result}")
+            
+        # Получаем карту позы
+        pose_map = _b64_to_cv2(result["pose_maps"][0])
+        if pose_map is None or pose_map.size == 0:
+            raise ValueError("Failed to decode pose map image")
+        
+        # Конвертируем в градации серого для поиска ключевых точек
+        gray = cv2.cvtColor(pose_map, cv2.COLOR_BGR2GRAY)
+        
+        # Находим контуры
+        contours, _ = cv2.findContours(gray, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        if not contours:
+            raise ValueError("No contours found in pose map")
+        
+        # Берем самый большой контур
+        main_contour = max(contours, key=cv2.contourArea)
+        
+        # Получаем ограничивающий прямоугольник
+        x, y, w, h = cv2.boundingRect(main_contour)
+        box_xyxy = np.array([x, y, x + w, y + h])
+        
+        # Находим ключевые точки (локальные максимумы)
+        keypoints = []
+        for i in range(17):  # 17 ключевых точек в OpenPose
+            # Создаем маску для текущей ключевой точки
+            mask = np.zeros_like(gray)
+            cv2.drawContours(mask, [main_contour], -1, 255, -1)
+            
+            # Находим локальный максимум в области контура
+            local_max = cv2.minMaxLoc(gray, mask=mask)
+            if local_max[1] > 0:  # Если нашли максимум
+                keypoints.append([local_max[3][0], local_max[3][1]])
+            else:
+                keypoints.append([0, 0])  # Если точка не найдена
+        
+        return np.array(keypoints), box_xyxy
+        
+    except requests.exceptions.RequestException as e:
+        raise ValueError(f"ControlNet request failed: {str(e)}")
+    except Exception as e:
+        raise ValueError(f"Failed to process pose detection: {str(e)}")
 
 # ──────────────────────────────────────────────────────────────────────
 #  main mask generator
