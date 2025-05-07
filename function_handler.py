@@ -126,9 +126,40 @@ def generate_body_mask(img_b64: str) -> tuple[str, dict]:
     x1, y1, x2, y2 = box_xyxy
     crop = img_bgr[y1:y2, x1:x2]
 
-    # 2. SAM full‑body mask --------------------------------------------------------
+    # 2. SAM full‑body mask -------------------------------------------------
     masks = mask_gen.generate(crop)
-    body_mask = max(masks, key=lambda m: m["area"])["segmentation"].astype(bool)
+
+    crop_h, crop_w = crop.shape[:2]
+    crop_area = crop_h * crop_w
+
+# --- helper: проверяем, попадает ли хотя бы 4 ключ‑точки в маску -------
+    def _kp_covered(seg: np.ndarray, pts: np.ndarray, thresh: int = 4) -> bool:
+        ok = 0
+        for x, y in pts:
+            if x <= 0 or y <= 0:
+                continue
+            if y - y1 >= 0 and x - x1 >= 0 and y - y1 < seg.shape[0] and x - x1 < seg.shape[1]:
+                ok += bool(seg[int(y - y1), int(x - x1)])
+        return ok >= thresh
+
+    # 2a. собираем кандидатов: не > 80 % кропа и закрывают ≥4 ключ‑точки
+    candidates: list[np.ndarray] = []
+    for m in masks:
+        seg = m["segmentation"]
+        if m["area"] > crop_area * 0.80:      # почти весь кроп = фон → пропускаем
+            continue
+        if _kp_covered(seg, keypts):
+            candidates.append(seg)
+
+    # 2b. если нашлось ≥1 кандидата → объединяем; иначе fallback: берём 2‑ю по площади
+    if candidates:
+        body_mask = np.zeros_like(candidates[0], dtype=bool)
+        for seg in candidates:
+            body_mask |= seg
+    else:
+        masks_sorted = sorted(masks, key=lambda m: m["area"], reverse=True)
+        body_mask = masks_sorted[1]["segmentation"] if len(masks_sorted) > 1 else masks_sorted[0]["segmentation"]
+    body_mask = body_mask.astype(bool)
 
     # 3. Build head+hair mask ------------------------------------------------------
     head_idx = [0, 1, 2, 3, 4]  # nose, eyes, ears
@@ -217,6 +248,7 @@ def _process_sd_results(response_data):
         return response_data
     except Exception as e:
         return {"error": f"Failed to process SD results: {e}", "original_response": response_data}
+
 
 def _process_sam_results(response_data):
     """
