@@ -341,7 +341,7 @@ def process_request(job: dict):
                         "input_image": canny_result["images"][0],
                         "module": "canny",
                         "model": "control_v11p_sd15_canny",
-                        "weight": 0.3,  # Ещё уменьшаем вес для лучшего сохранения цвета
+                        "weight": 0.3,  # Сохраняем вес для цвета
                         "resize_mode": "Resize and Fill",
                         "lowvram": False,
                         "processor_res": 512,
@@ -367,7 +367,7 @@ def process_request(job: dict):
                         "input_image": softedge_result["images"][0],
                         "module": "softedge",
                         "model": "control_v11p_sd15_softedge",
-                        "weight": 0.4,
+                        "weight": 0.3,  # Уменьшаем вес для лучшего баланса
                         "resize_mode": "Resize and Fill",
                         "lowvram": False,
                         "processor_res": 512,
@@ -397,7 +397,7 @@ def process_request(job: dict):
                             "input_image": pose_result["images"][0],
                             "module": "openpose",
                             "model": "control_v11p_sd15_pose",
-                            "weight": 0.65,  # Ещё немного уменьшаем вес
+                            "weight": 0.85,  # Увеличиваем вес для лучшей анатомии
                             "resize_mode": "Resize and Fill",
                             "lowvram": False,
                             "processor_res": 512,
@@ -416,7 +416,7 @@ def process_request(job: dict):
                             "input_image": pose_result["images"][0],
                             "module": "openpose",
                             "model": "control_v11p_sd15_pose",
-                            "weight": 0.65,  # Ещё немного уменьшаем вес
+                            "weight": 0.85,  # Увеличиваем вес для лучшей анатомии
                             "resize_mode": "Resize and Fill",
                             "lowvram": False,
                             "processor_res": 512,
@@ -447,22 +447,23 @@ def process_request(job: dict):
             })
 
             # Добавляем промпт для сохранения анатомии и цвета кожи
-            skin_tone_prompts = ["natural skin tone", "detailed skin texture", "seamless neck connection"]
+            skin_tone_prompts = ["natural skin tone", "detailed skin texture", "seamless neck connection", "anatomically correct", "perfect body proportions"]
             if "prompt" in params:
                 params["prompt"] += ", perfect anatomy, correct body proportions, natural pose, " + ", ".join(skin_tone_prompts)
             
             negative_prompts = ["deformed anatomy", "bad anatomy", "wrong proportions", "unnatural pose", 
-                              "wrong skin color", "unnatural skin tone", "neck seam", "discontinuous neck"]
+                              "wrong skin color", "unnatural skin tone", "neck seam", "discontinuous neck", 
+                              "distorted body", "malformed limbs", "extra limbs"]
             if "negative_prompt" in params:
                 params["negative_prompt"] += ", " + ", ".join(negative_prompts)
             else:
                 params["negative_prompt"] = ", ".join(negative_prompts)
 
-            # Уменьшаем denoising strength для лучшего сохранения цвета
+            # Оптимальный denoising strength для баланса между анатомией и цветом
             if "denoising_strength" not in params:
-                params["denoising_strength"] = 0.4  # Ещё меньше для лучшего сохранения цвета
+                params["denoising_strength"] = 0.45
             else:
-                params["denoising_strength"] = min(params["denoising_strength"], 0.4)
+                params["denoising_strength"] = min(params["denoising_strength"], 0.45)
 
             # Обеспечиваем достаточное количество шагов для качественного результата
             if "steps" not in params:
