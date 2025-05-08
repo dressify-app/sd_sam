@@ -168,92 +168,6 @@ def _get_pose_keypoints(img_b64: str, img_bgr: np.ndarray) -> tuple[np.ndarray, 
         raise ValueError(f"Failed to process pose detection: {str(e)}")
 
 # ──────────────────────────────────────────────────────────────────────
-#  Функция для анализа цвета кожи и применения его как промпта
-# ──────────────────────────────────────────────────────────────────────
-def _analyze_skin_color(img_b64: str) -> tuple[str, str]:
-    """Анализирует цвет кожи на изображении и возвращает соответствующие промпты."""
-    # Преобразуем base64 в cv2 изображение
-    img_bgr = _b64_to_cv2(img_b64)
-    img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
-    
-    # Используем MediaPipe для определения лица
-    face_results = mp_face.process(img_rgb)
-    
-    if not face_results.multi_face_landmarks:
-        # Если лицо не обнаружено, возвращаем нейтральные промпты
-        return "preserve skin tone, match original skin color", "different skin tone, wrong skin color"
-    
-    # Получаем области лица для анализа цвета кожи
-    h, w = img_rgb.shape[:2]
-    landmarks = face_results.multi_face_landmarks[0].landmark
-    
-    # Выбираем точки на щеках для анализа цвета
-    face_points = []
-    # Точки на левой щеке
-    for idx in [117, 118, 119, 348]:  # Индексы точек на щеке
-        x, y = int(landmarks[idx].x * w), int(landmarks[idx].y * h)
-        if 0 <= x < w and 0 <= y < h:
-            face_points.append((y, x))
-    
-    # Точки на правой щеке
-    for idx in [349, 350, 351, 377]:  # Индексы точек на щеке
-        x, y = int(landmarks[idx].x * w), int(landmarks[idx].y * h)
-        if 0 <= x < w and 0 <= y < h:
-            face_points.append((y, x))
-    
-    if not face_points:
-        # Если не удалось получить точки, возвращаем нейтральные промпты
-        return "preserve skin tone, match original skin color", "different skin tone, wrong skin color"
-    
-    # Вычисляем средний цвет кожи
-    skin_colors = [img_rgb[y, x] for y, x in face_points]
-    avg_skin_color = np.mean(skin_colors, axis=0).astype(int)
-    r, g, b = avg_skin_color
-    
-    # Определяем тон кожи на основе цвета
-    light_threshold = 180  # Яркий/бледный тон
-    medium_threshold = 140  # Средний тон
-    
-    # Вычисляем яркость
-    brightness = 0.299 * r + 0.587 * g + 0.114 * b
-    
-    # Определяем соотношение красного к другим каналам для розового/румяного оттенка
-    red_ratio = r / max(g, b) if max(g, b) > 0 else 1
-    
-    # Определяем промпты на основе анализа цвета
-    positive_prompts = []
-    negative_prompts = []
-    
-    # Яркость (светлая/темная кожа)
-    if brightness > light_threshold:
-        positive_prompts.append("pale skin")
-        positive_prompts.append("fair skin")
-        positive_prompts.append("light skin tone")
-        negative_prompts.extend(["dark skin", "tan skin", "brown skin", "tanned"])
-    elif brightness < medium_threshold:
-        positive_prompts.append("dark skin")
-        positive_prompts.append("deep skin tone")
-        negative_prompts.extend(["pale skin", "fair skin", "light skin tone"])
-    else:
-        positive_prompts.append("medium skin tone")
-    
-    # Оттенок (розовый/оливковый)
-    if red_ratio > 1.1:
-        positive_prompts.append("rosy skin undertone")
-        positive_prompts.append("pinkish skin")
-    elif g > r:
-        positive_prompts.append("olive skin undertone")
-    
-    # Общие промпты для точного сохранения цвета
-    positive_prompts.extend(["exact skin tone", "matching skin color", "preserve original skin tone"])
-    negative_prompts.extend(["wrong skin color", "different skin tone", "unmatching skin"])
-
-    pos_prompt = ", ".join(positive_prompts)
-    neg_prompt = ", ".join(negative_prompts)
-    
-    return pos_prompt, neg_prompt
-
-# ──────────────────────────────────────────────────────────────────────
 #  generate_body_mask: MediaPipe segmentation + FaceMesh head removal
 # ──────────────────────────────────────────────────────────────────────
 def generate_body_mask(img_b64: str, dilate_size: int = 15) -> tuple[str, dict]:
@@ -385,9 +299,6 @@ def process_request(job: dict):
         if input_image:
             # Создаем ControlNet units для глубины и позы
             controlnet_units = []
-            
-            # Анализируем цвет кожи для точных промптов
-            skin_tone_pos, skin_tone_neg = _analyze_skin_color(input_image)
             
             # Depth ControlNet
             depth_response = requests.post(
@@ -532,38 +443,35 @@ def process_request(job: dict):
                 "img2img_fix_steps": True,
                 "img2img_color_correction": True,  # Включаем коррекцию цвета
                 "img2img_background_color": "white",
-                "sd_vae": "None",  # Отключаем VAE для лучшего сохранения цвета
-                "face_restoration": True  # Включаем восстановление лиц
+                "sd_vae": "None"  # Отключаем VAE для лучшего сохранения цвета
             })
 
             # Добавляем промпт для сохранения анатомии и цвета кожи
-            # Используем результаты анализа кожи
-            skin_tone_prompts = [
-                skin_tone_pos,  # Результат анализа цвета кожи
-                "detailed skin texture", 
-                "seamless neck connection", 
-                "anatomically correct", 
-                "accurate body proportions"
+            base_positive_prompt_additions = ["perfect anatomy", "accurate body proportions", "natural pose"]
+            skin_specific_positive_prompts = [
+                "preserve original skin tone and texture", "detailed skin texture", "seamless neck connection",
+                "anatomically correct" # anatomically correct лучше здесь, чем в общем
             ]
-            if "prompt" in params:
-                params["prompt"] += ", perfect anatomy, correct body proportions, natural pose, " + ", ".join(skin_tone_prompts)
             
-            negative_prompts = [
+            current_prompt = params.get("prompt", "")
+            new_prompt_parts = base_positive_prompt_additions + skin_specific_positive_prompts
+            params["prompt"] = current_prompt + ", " + ", ".join(part for part in new_prompt_parts if part)
+
+            negative_prompts_list = [
                 "deformed anatomy", "bad anatomy", "wrong proportions", "unnatural pose", 
-                skin_tone_neg,  # Негативные промпты из анализа кожи
+                "wrong skin color", "unnatural skin tone", "changed skin tone", "skin tone mismatch with original",
                 "neck seam", "discontinuous neck", 
                 "distorted body", "malformed limbs", "extra limbs"
             ]
-            if "negative_prompt" in params:
-                params["negative_prompt"] += ", " + ", ".join(negative_prompts)
-            else:
-                params["negative_prompt"] = ", ".join(negative_prompts)
+            
+            current_negative_prompt = params.get("negative_prompt", "")
+            params["negative_prompt"] = current_negative_prompt + ", " + ", ".join(part for part in negative_prompts_list if part)
 
             # Оптимальный denoising strength для баланса между анатомией и цветом
             if "denoising_strength" not in params:
-                params["denoising_strength"] = 0.35  # Ещё меньше для лучшего сохранения цвета
+                params["denoising_strength"] = 0.35  # Уменьшаем для лучшего сохранения исходного цвета
             else:
-                params["denoising_strength"] = min(params["denoising_strength"], 0.35)
+                params["denoising_strength"] = min(params.get("denoising_strength", 0.35), 0.35)
 
             # Обеспечиваем достаточное количество шагов для качественного результата
             if "steps" not in params:
