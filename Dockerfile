@@ -74,8 +74,7 @@ RUN pip install --no-cache-dir \
 # ----------------------------------------------------------------------
 RUN mkdir -p extensions && \
     git clone https://github.com/Bing-su/adetailer.git extensions/adetailer && \
-    git clone https://github.com/pkuliyi2015/multidiffusion-upscaler-for-automatic1111.git extensions/multidiffusion-upscaler && \
-    git clone https://github.com/pkuliyi2015/sd-webui-multidiffusion-upscaler.git extensions/multidiffusion-upscaler
+    git clone https://github.com/pkuliyi2015/multidiffusion-upscaler-for-automatic1111.git extensions/multidiffusion-upscaler
 
 # ----------------------------------------------------------------------
 #  APP FILES
