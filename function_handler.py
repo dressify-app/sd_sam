@@ -92,64 +92,6 @@ def _cv2_to_png_bytes(mask: np.ndarray) -> bytes:
     _, buf = cv2.imencode(".png", mask)
     return buf.tobytes()
 
-# ──────────────────────────────────────────────────────────────────────
-#  Функция для сохранения цвета кожи из оригинала
-# ──────────────────────────────────────────────────────────────────────
-def _preserve_skin_color(original_img_b64: str, generated_img_b64: str) -> str:
-    """
-    Сохраняет цвет кожи из оригинального изображения.
-    
-    Args:
-        original_img_b64: Оригинальное изображение в формате base64
-        generated_img_b64: Сгенерированное изображение в формате base64
-        
-    Returns:
-        Изображение с сохраненным цветом кожи в формате base64
-    """
-    # Конвертируем base64 в cv2 изображения
-    orig_img = _b64_to_cv2(original_img_b64)
-    gen_img = _b64_to_cv2(generated_img_b64)
-    
-    # Конвертируем в RGB для MediaPipe
-    orig_rgb = cv2.cvtColor(orig_img, cv2.COLOR_BGR2RGB)
-    
-    # Получаем маску лица и кожи с помощью MediaPipe
-    results = mp_seg.process(orig_rgb)
-    skin_mask = (results.segmentation_mask > 0.2).astype(np.uint8) * 255
-    
-    # Создаем маску для лица с помощью FaceMesh
-    face_mask = np.zeros_like(skin_mask)
-    face_results = mp_face.process(orig_rgb)
-    if face_results.multi_face_landmarks:
-        h, w = orig_img.shape[:2]
-        landmarks = face_results.multi_face_landmarks[0].landmark
-        points = np.array([(int(lm.x * w), int(lm.y * h)) for lm in landmarks], dtype=np.int32)
-        hull = cv2.convexHull(points)
-        cv2.fillConvexPoly(face_mask, hull, 255)
-    
-    # Объединяем маски лица и кожи
-    combined_mask = cv2.bitwise_or(skin_mask, face_mask)
-    
-    # Расширяем маску для лучшего перехода
-    kernel = np.ones((5, 5), np.uint8)
-    combined_mask = cv2.dilate(combined_mask, kernel, iterations=2)
-    
-    # Сглаживаем маску для плавных переходов
-    combined_mask = cv2.GaussianBlur(combined_mask, (15, 15), 0)
-    
-    # Нормализуем маску до диапазона [0, 1]
-    combined_mask = combined_mask.astype(float) / 255.0
-    
-    # Применяем маску: берем цвет кожи из оригинала, остальное из сгенерированного
-    combined_mask = np.expand_dims(combined_mask, axis=2)
-    result_img = orig_img * combined_mask + gen_img * (1 - combined_mask)
-    result_img = result_img.astype(np.uint8)
-    
-    # Конвертируем обратно в base64
-    _, buffer = cv2.imencode('.jpg', result_img, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
-    img_b64 = base64.b64encode(buffer).decode('utf-8')
-    return f"data:image/jpeg;base64,{img_b64}"
-
 def _get_pose_keypoints(img_b64: str, img_bgr: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Получает ключевые точки позы используя ControlNet OpenPose."""
     try:
@@ -226,6 +168,92 @@ def _get_pose_keypoints(img_b64: str, img_bgr: np.ndarray) -> tuple[np.ndarray, 
         raise ValueError(f"Failed to process pose detection: {str(e)}")
 
 # ──────────────────────────────────────────────────────────────────────
+#  Функция для анализа цвета кожи и применения его как промпта
+# ──────────────────────────────────────────────────────────────────────
+def _analyze_skin_color(img_b64: str) -> tuple[str, str]:
+    """Анализирует цвет кожи на изображении и возвращает соответствующие промпты."""
+    # Преобразуем base64 в cv2 изображение
+    img_bgr = _b64_to_cv2(img_b64)
+    img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+    
+    # Используем MediaPipe для определения лица
+    face_results = mp_face.process(img_rgb)
+    
+    if not face_results.multi_face_landmarks:
+        # Если лицо не обнаружено, возвращаем нейтральные промпты
+        return "preserve skin tone, match original skin color", "different skin tone, wrong skin color"
+    
+    # Получаем области лица для анализа цвета кожи
+    h, w = img_rgb.shape[:2]
+    landmarks = face_results.multi_face_landmarks[0].landmark
+    
+    # Выбираем точки на щеках для анализа цвета
+    face_points = []
+    # Точки на левой щеке
+    for idx in [117, 118, 119, 348]:  # Индексы точек на щеке
+        x, y = int(landmarks[idx].x * w), int(landmarks[idx].y * h)
+        if 0 <= x < w and 0 <= y < h:
+            face_points.append((y, x))
+    
+    # Точки на правой щеке
+    for idx in [349, 350, 351, 377]:  # Индексы точек на щеке
+        x, y = int(landmarks[idx].x * w), int(landmarks[idx].y * h)
+        if 0 <= x < w and 0 <= y < h:
+            face_points.append((y, x))
+    
+    if not face_points:
+        # Если не удалось получить точки, возвращаем нейтральные промпты
+        return "preserve skin tone, match original skin color", "different skin tone, wrong skin color"
+    
+    # Вычисляем средний цвет кожи
+    skin_colors = [img_rgb[y, x] for y, x in face_points]
+    avg_skin_color = np.mean(skin_colors, axis=0).astype(int)
+    r, g, b = avg_skin_color
+    
+    # Определяем тон кожи на основе цвета
+    light_threshold = 180  # Яркий/бледный тон
+    medium_threshold = 140  # Средний тон
+    
+    # Вычисляем яркость
+    brightness = 0.299 * r + 0.587 * g + 0.114 * b
+    
+    # Определяем соотношение красного к другим каналам для розового/румяного оттенка
+    red_ratio = r / max(g, b) if max(g, b) > 0 else 1
+    
+    # Определяем промпты на основе анализа цвета
+    positive_prompts = []
+    negative_prompts = []
+    
+    # Яркость (светлая/темная кожа)
+    if brightness > light_threshold:
+        positive_prompts.append("pale skin")
+        positive_prompts.append("fair skin")
+        positive_prompts.append("light skin tone")
+        negative_prompts.extend(["dark skin", "tan skin", "brown skin", "tanned"])
+    elif brightness < medium_threshold:
+        positive_prompts.append("dark skin")
+        positive_prompts.append("deep skin tone")
+        negative_prompts.extend(["pale skin", "fair skin", "light skin tone"])
+    else:
+        positive_prompts.append("medium skin tone")
+    
+    # Оттенок (розовый/оливковый)
+    if red_ratio > 1.1:
+        positive_prompts.append("rosy skin undertone")
+        positive_prompts.append("pinkish skin")
+    elif g > r:
+        positive_prompts.append("olive skin undertone")
+    
+    # Общие промпты для точного сохранения цвета
+    positive_prompts.extend(["exact skin tone", "matching skin color", "preserve original skin tone"])
+    negative_prompts.extend(["wrong skin color", "different skin tone", "unmatching skin"])
+
+    pos_prompt = ", ".join(positive_prompts)
+    neg_prompt = ", ".join(negative_prompts)
+    
+    return pos_prompt, neg_prompt
+
+# ──────────────────────────────────────────────────────────────────────
 #  generate_body_mask: MediaPipe segmentation + FaceMesh head removal
 # ──────────────────────────────────────────────────────────────────────
 def generate_body_mask(img_b64: str, dilate_size: int = 15) -> tuple[str, dict]:
@@ -286,27 +314,11 @@ def _process_sd_results(response_data):
                 imgs = out['images']
         if not imgs and 'images' in response_data and isinstance(response_data['images'], list):
             imgs = response_data['images']
-        
-        # Сохраняем информацию об оригинальном изображении, если оно было
-        orig_image = None
-        if 'input' in response_data and 'params' in response_data['input']:
-            params = response_data['input']['params']
-            if 'init_images' in params and params['init_images']:
-                orig_image = params['init_images'][0]
-        
         if imgs:
             uploaded = []
             for data in imgs:
                 # data may be base64
                 img_b64 = data if data.startswith("data:image") else f"data:image/png;base64,{data}"
-                
-                # Применяем коррекцию цвета кожи, если есть оригинальное изображение
-                if orig_image:
-                    try:
-                        img_b64 = _preserve_skin_color(orig_image, img_b64)
-                    except Exception as e:
-                        print(f"Error preserving skin color: {e}")
-                
                 cv2_img = _b64_to_cv2(img_b64)
                 _, buf = cv2.imencode(".jpg", cv2_img, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
                 uploaded.append(_upload_to_s3(buf.tobytes(), source_type='bytes'))
@@ -316,8 +328,7 @@ def _process_sd_results(response_data):
                 response_data['images'] = uploaded
             response_data['result_url'] = uploaded[0]
         return response_data
-    except Exception as e:
-        print(f"Error in _process_sd_results: {e}")
+    except Exception:
         return response_data
 
 def _process_sam_results(response_data):
@@ -375,6 +386,35 @@ def process_request(job: dict):
             # Создаем ControlNet units для глубины и позы
             controlnet_units = []
             
+            # Анализируем цвет кожи для точных промптов
+            skin_tone_pos, skin_tone_neg = _analyze_skin_color(input_image)
+            
+            # Depth ControlNet
+            depth_response = requests.post(
+                "http://127.0.0.1:7860/controlnet/detect",
+                json={
+                    "controlnet_module": "depth",
+                    "controlnet_input_images": [input_image]
+                }
+            )
+            if depth_response.ok:
+                depth_result = depth_response.json()
+                if "depth_maps" in depth_result:
+                    controlnet_units.append({
+                        "input_image": depth_result["depth_maps"][0],
+                        "module": "depth",
+                        "model": "control_v11f1p_sd15_depth",
+                        "weight": 0.8,
+                        "resize_mode": "Resize and Fill",
+                        "lowvram": False,
+                        "processor_res": 512,
+                        "threshold_a": 64,
+                        "threshold_b": 64,
+                        "guidance_start": 0.0,
+                        "guidance_end": 1.0,
+                        "control_mode": "Balanced"
+                    })
+
             # Добавляем ControlNet для кани для сохранения деталей и цвета
             canny_response = requests.post(
                 "http://127.0.0.1:7860/controlnet/detect",
@@ -492,22 +532,26 @@ def process_request(job: dict):
                 "img2img_fix_steps": True,
                 "img2img_color_correction": True,  # Включаем коррекцию цвета
                 "img2img_background_color": "white",
-                "sd_vae": "None"  # Отключаем VAE для лучшего сохранения цвета
+                "sd_vae": "None",  # Отключаем VAE для лучшего сохранения цвета
+                "face_restoration": True  # Включаем восстановление лиц
             })
 
             # Добавляем промпт для сохранения анатомии и цвета кожи
+            # Используем результаты анализа кожи
             skin_tone_prompts = [
-                "pale skin", "fair skin", "light skin tone", "white skin", 
-                "detailed skin texture", "seamless neck connection", 
-                "anatomically correct", "accurate body proportions"
+                skin_tone_pos,  # Результат анализа цвета кожи
+                "detailed skin texture", 
+                "seamless neck connection", 
+                "anatomically correct", 
+                "accurate body proportions"
             ]
             if "prompt" in params:
                 params["prompt"] += ", perfect anatomy, correct body proportions, natural pose, " + ", ".join(skin_tone_prompts)
             
             negative_prompts = [
                 "deformed anatomy", "bad anatomy", "wrong proportions", "unnatural pose", 
-                "dark skin", "tan skin", "brown skin", "tanned", "sun tan",
-                "wrong skin color", "unnatural skin tone", "neck seam", "discontinuous neck", 
+                skin_tone_neg,  # Негативные промпты из анализа кожи
+                "neck seam", "discontinuous neck", 
                 "distorted body", "malformed limbs", "extra limbs"
             ]
             if "negative_prompt" in params:
@@ -517,9 +561,9 @@ def process_request(job: dict):
 
             # Оптимальный denoising strength для баланса между анатомией и цветом
             if "denoising_strength" not in params:
-                params["denoising_strength"] = 0.4  # Уменьшаем для лучшего сохранения цвета
+                params["denoising_strength"] = 0.35  # Ещё меньше для лучшего сохранения цвета
             else:
-                params["denoising_strength"] = min(params["denoising_strength"], 0.4)
+                params["denoising_strength"] = min(params["denoising_strength"], 0.35)
 
             # Обеспечиваем достаточное количество шагов для качественного результата
             if "steps" not in params:
