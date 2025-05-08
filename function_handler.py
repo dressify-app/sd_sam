@@ -315,7 +315,7 @@ def process_request(job: dict):
                         "input_image": depth_result["depth_maps"][0],
                         "module": "depth",
                         "model": "control_v11f1p_sd15_depth",
-                        "weight": 0.6,  # Уменьшаем вес для меньшего влияния на цвет
+                        "weight": 0.8,
                         "resize_mode": "Resize and Fill",
                         "lowvram": False,
                         "processor_res": 512,
@@ -325,8 +325,34 @@ def process_request(job: dict):
                         "guidance_end": 1.0,
                         "control_mode": "Balanced"
                     })
-            
-            # Pose ControlNet
+
+            # Добавляем ControlNet для кани для сохранения деталей и цвета
+            canny_response = requests.post(
+                "http://127.0.0.1:7860/controlnet/detect",
+                json={
+                    "controlnet_module": "canny",
+                    "controlnet_input_images": [input_image]
+                }
+            )
+            if canny_response.ok:
+                canny_result = canny_response.json()
+                if "images" in canny_result:
+                    controlnet_units.append({
+                        "input_image": canny_result["images"][0],
+                        "module": "canny",
+                        "model": "control_v11p_sd15_canny",
+                        "weight": 0.4,  # Меньший вес для сохранения цвета
+                        "resize_mode": "Resize and Fill",
+                        "lowvram": False,
+                        "processor_res": 512,
+                        "threshold_a": 100,
+                        "threshold_b": 200,
+                        "guidance_start": 0.0,
+                        "guidance_end": 1.0,
+                        "control_mode": "Balanced"
+                    })
+                    
+            # Добавляем ControlNet для позы для контроля анатомии
             pose_response = requests.post(
                 "http://127.0.0.1:7860/controlnet/detect",
                 json={
@@ -345,7 +371,7 @@ def process_request(job: dict):
                             "input_image": pose_result["images"][0],
                             "module": "openpose",
                             "model": "control_v11p_sd15_pose",
-                            "weight": 0.8,
+                            "weight": 0.75,  # Немного уменьшаем вес
                             "resize_mode": "Resize and Fill",
                             "lowvram": False,
                             "processor_res": 512,
@@ -364,7 +390,7 @@ def process_request(job: dict):
                             "input_image": pose_result["images"][0],
                             "module": "openpose",
                             "model": "control_v11p_sd15_pose",
-                            "weight": 0.8,
+                            "weight": 0.75,  # Немного уменьшаем вес
                             "resize_mode": "Resize and Fill",
                             "lowvram": False,
                             "processor_res": 512,
@@ -374,7 +400,7 @@ def process_request(job: dict):
                             "guidance_end": 1.0,
                             "control_mode": "Balanced"
                         })
-            
+                        
             # Добавляем ControlNet units в параметры
             if controlnet_units:
                 params["alwayson_scripts"] = {
@@ -383,26 +409,29 @@ def process_request(job: dict):
                     }
                 }
 
-            # Добавляем параметры для лучшего сохранения деталей
+            # Добавляем базовые параметры для сохранения анатомии и цвета
             if "override_settings" not in params:
                 params["override_settings"] = {}
             params["override_settings"].update({
-                "CLIP_stop_at_last_layers": 2,  # Уменьшаем влияние CLIP на цвет
-                "img2img_fix_steps": True,  # Фиксируем шаги для лучшей стабильности
-                "img2img_background_color": "white"  # Устанавливаем белый фон
+                "CLIP_stop_at_last_layers": 1,
+                "img2img_fix_steps": True,
+                "img2img_color_correction": True,  # Включаем коррекцию цвета
+                "img2img_background_color": "white"
             })
 
-            # Добавляем параметры для лучшего сохранения деталей
-            if "script_args" not in params:
-                params["script_args"] = []
-            params["script_args"].extend([
-                "Detailer",  # Включаем Detailer для лучшего сохранения деталей
-                {
-                    "detailer_denoising_strength": 0.3,  # Уменьшаем силу денойзинга
-                    "detailer_prompt": "skin, face, hands, detailed skin texture",  # Фокус на коже
-                    "detailer_negative_prompt": "deformed skin, bad skin, wrong skin color"  # Избегаем проблем с кожей
-                }
-            ])
+            # Добавляем промпт для сохранения анатомии и цвета кожи
+            if "prompt" in params:
+                params["prompt"] += ", perfect anatomy, correct body proportions, natural pose, natural skin tone, detailed skin texture"
+            if "negative_prompt" in params:
+                params["negative_prompt"] += ", deformed anatomy, bad anatomy, wrong proportions, unnatural pose, wrong skin color, unnatural skin tone"
+            else:
+                params["negative_prompt"] = "deformed anatomy, bad anatomy, wrong proportions, unnatural pose, wrong skin color, unnatural skin tone"
+
+            # Уменьшаем denoising strength для лучшего сохранения цвета
+            if "denoising_strength" not in params:
+                params["denoising_strength"] = 0.5
+            else:
+                params["denoising_strength"] = min(params["denoising_strength"], 0.5)
 
     local_url = f"http://127.0.0.1:7860/{path.lstrip('/')}"
     try:
