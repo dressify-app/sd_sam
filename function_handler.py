@@ -315,7 +315,7 @@ def process_request(job: dict):
                         "input_image": depth_result["depth_maps"][0],
                         "module": "depth",
                         "model": "control_v11f1p_sd15_depth",
-                        "weight": 0.8,
+                        "weight": 0.6,  # Уменьшаем вес для меньшего влияния на цвет
                         "resize_mode": "Resize and Fill",
                         "lowvram": False,
                         "processor_res": 512,
@@ -337,20 +337,43 @@ def process_request(job: dict):
             if pose_response.ok:
                 pose_result = pose_response.json()
                 if "images" in pose_result:
-                    controlnet_units.append({
-                        "input_image": pose_result["images"][0],
-                        "module": "openpose",
-                        "model": "control_v11p_sd15_pose",
-                        "weight": 0.8,
-                        "resize_mode": "Resize and Fill",
-                        "lowvram": False,
-                        "processor_res": 512,
-                        "threshold_a": 64,
-                        "threshold_b": 64,
-                        "guidance_start": 0.0,
-                        "guidance_end": 1.0,
-                        "control_mode": "Balanced"
-                    })
+                    # Получаем ключевые точки
+                    try:
+                        keypoints, box_xyxy = _get_pose_keypoints(input_image, _b64_to_cv2(input_image))
+                        # Добавляем ключевые точки в параметры ControlNet
+                        controlnet_units.append({
+                            "input_image": pose_result["images"][0],
+                            "module": "openpose",
+                            "model": "control_v11p_sd15_pose",
+                            "weight": 0.8,
+                            "resize_mode": "Resize and Fill",
+                            "lowvram": False,
+                            "processor_res": 512,
+                            "threshold_a": 64,
+                            "threshold_b": 64,
+                            "guidance_start": 0.0,
+                            "guidance_end": 1.0,
+                            "control_mode": "Balanced",
+                            "keypoints": keypoints.tolist(),
+                            "bounding_box": box_xyxy.tolist()
+                        })
+                    except Exception as e:
+                        print(f"Warning: Failed to get pose keypoints: {str(e)}")
+                        # Если не удалось получить ключевые точки, используем стандартный ControlNet
+                        controlnet_units.append({
+                            "input_image": pose_result["images"][0],
+                            "module": "openpose",
+                            "model": "control_v11p_sd15_pose",
+                            "weight": 0.8,
+                            "resize_mode": "Resize and Fill",
+                            "lowvram": False,
+                            "processor_res": 512,
+                            "threshold_a": 64,
+                            "threshold_b": 64,
+                            "guidance_start": 0.0,
+                            "guidance_end": 1.0,
+                            "control_mode": "Balanced"
+                        })
             
             # Добавляем ControlNet units в параметры
             if controlnet_units:
@@ -359,6 +382,27 @@ def process_request(job: dict):
                         "args": controlnet_units
                     }
                 }
+
+            # Добавляем параметры для лучшего сохранения деталей
+            if "override_settings" not in params:
+                params["override_settings"] = {}
+            params["override_settings"].update({
+                "CLIP_stop_at_last_layers": 2,  # Уменьшаем влияние CLIP на цвет
+                "img2img_fix_steps": True,  # Фиксируем шаги для лучшей стабильности
+                "img2img_background_color": "white"  # Устанавливаем белый фон
+            })
+
+            # Добавляем параметры для лучшего сохранения деталей
+            if "script_args" not in params:
+                params["script_args"] = []
+            params["script_args"].extend([
+                "Detailer",  # Включаем Detailer для лучшего сохранения деталей
+                {
+                    "detailer_denoising_strength": 0.3,  # Уменьшаем силу денойзинга
+                    "detailer_prompt": "skin, face, hands, detailed skin texture",  # Фокус на коже
+                    "detailer_negative_prompt": "deformed skin, bad skin, wrong skin color"  # Избегаем проблем с кожей
+                }
+            ])
 
     local_url = f"http://127.0.0.1:7860/{path.lstrip('/')}"
     try:
