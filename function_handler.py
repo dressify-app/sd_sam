@@ -23,7 +23,7 @@ except ImportError:
 # ──────────────────────────────────────────────────────────────────────
 mp_selfie_segmentation = mp.solutions.selfie_segmentation
 mp_seg = mp_selfie_segmentation.SelfieSegmentation(model_selection=1)
-mp_face = mp.face_mesh.FaceMesh(
+mp_face = mp.solutions.face_mesh.FaceMesh(
     static_image_mode=True,
     max_num_faces=1,
     refine_landmarks=True,
