@@ -439,7 +439,7 @@ def process_request(job: dict):
             if "override_settings" not in params:
                 params["override_settings"] = {}
             params["override_settings"].update({
-                "CLIP_stop_at_last_layers": 1,
+                "CLIP_stop_at_last_layers": 2,  # Увеличиваем для лучшего сохранения цвета
                 "img2img_fix_steps": True,
                 "img2img_color_correction": True,  # Включаем коррекцию цвета
                 "img2img_background_color": "white",
@@ -447,13 +447,20 @@ def process_request(job: dict):
             })
 
             # Добавляем промпт для сохранения анатомии и цвета кожи
-            skin_tone_prompts = ["natural skin tone", "detailed skin texture", "seamless neck connection", "anatomically correct", "perfect body proportions"]
+            skin_tone_prompts = [
+                "pale skin", "fair skin", "light skin tone", "white skin", 
+                "detailed skin texture", "seamless neck connection", 
+                "anatomically correct", "accurate body proportions"
+            ]
             if "prompt" in params:
                 params["prompt"] += ", perfect anatomy, correct body proportions, natural pose, " + ", ".join(skin_tone_prompts)
             
-            negative_prompts = ["deformed anatomy", "bad anatomy", "wrong proportions", "unnatural pose", 
-                              "wrong skin color", "unnatural skin tone", "neck seam", "discontinuous neck", 
-                              "distorted body", "malformed limbs", "extra limbs"]
+            negative_prompts = [
+                "deformed anatomy", "bad anatomy", "wrong proportions", "unnatural pose", 
+                "dark skin", "tan skin", "brown skin", "tanned", "sun tan",
+                "wrong skin color", "unnatural skin tone", "neck seam", "discontinuous neck", 
+                "distorted body", "malformed limbs", "extra limbs"
+            ]
             if "negative_prompt" in params:
                 params["negative_prompt"] += ", " + ", ".join(negative_prompts)
             else:
@@ -461,15 +468,23 @@ def process_request(job: dict):
 
             # Оптимальный denoising strength для баланса между анатомией и цветом
             if "denoising_strength" not in params:
-                params["denoising_strength"] = 0.45
+                params["denoising_strength"] = 0.4  # Уменьшаем для лучшего сохранения цвета
             else:
-                params["denoising_strength"] = min(params["denoising_strength"], 0.45)
+                params["denoising_strength"] = min(params["denoising_strength"], 0.4)
 
             # Обеспечиваем достаточное количество шагов для качественного результата
             if "steps" not in params:
-                params["steps"] = 25
+                params["steps"] = 30  # Увеличиваем количество шагов
             else:
-                params["steps"] = max(params["steps"], 25)
+                params["steps"] = max(params["steps"], 30)
+                
+            # Добавляем цветокоррекцию для бледной кожи
+            if "sampler_name" not in params:
+                params["sampler_name"] = "DPM++ 2M Karras"  # Лучший семплер для деталей
+            
+            # Увеличиваем CFG Scale для лучшего следования промпту
+            if "cfg_scale" not in params:
+                params["cfg_scale"] = 7.5
 
     local_url = f"http://127.0.0.1:7860/{path.lstrip('/')}"
     try:
