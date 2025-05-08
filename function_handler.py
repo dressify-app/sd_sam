@@ -21,7 +21,8 @@ except ImportError:
 # ──────────────────────────────────────────────────────────────────────
 #  MediaPipe Models
 # ──────────────────────────────────────────────────────────────────────
-mp_seg = mp.selfie_segmentation.SelfieSegmentation(model_selection=1)
+mp_selfie_segmentation = mp.solutions.selfie_segmentation
+mp_seg = mp_selfie_segmentation.SelfieSegmentation(model_selection=1)
 mp_face = mp.face_mesh.FaceMesh(
     static_image_mode=True,
     max_num_faces=1,
