@@ -1,18 +1,14 @@
+import os
+import io
+import uuid
+import base64
+import time
+import requests
 import runpod
-import os, requests, base64, time, uuid, io
-from PIL import Image
+import cv2
 import numpy as np
-import torch, cv2
-from segment_anything import sam_model_registry, SamAutomaticMaskGenerator, SamPredictor
-
-# ──────────────────────────────────────────────────────────────────────
-#  Models
-# ──────────────────────────────────────────────────────────────────────
-device = "cuda" if torch.cuda.is_available() else "cpu"
-
-sam_ckpt = os.getenv("SAM_CKPT", "sam_vit_b_01ec64.pth")
-sam_model = sam_model_registry["vit_b"](checkpoint=sam_ckpt).to(device).eval()
-predictor = SamPredictor(sam_model)
+from PIL import Image
+import mediapipe as mp
 os.environ["ULTRALYTICS_SKIP_VALIDATE"] = "1"
 
 try:
@@ -21,6 +17,17 @@ try:
 except ImportError:
     FastAPI = None
     uvicorn = None
+
+# ──────────────────────────────────────────────────────────────────────
+#  MediaPipe Models
+# ──────────────────────────────────────────────────────────────────────
+mp_seg = mp.selfie_segmentation.SelfieSegmentation(model_selection=1)
+mp_face = mp.face_mesh.FaceMesh(
+    static_image_mode=True,
+    max_num_faces=1,
+    refine_landmarks=True,
+    min_detection_confidence=0.5
+)
 
 # ──────────────────────────────────────────────────────────────────────
 #  helpers: upload to S3
@@ -42,8 +49,11 @@ def _upload_to_s3(image_data: bytes | str, *, source_type: str = "base64") -> st
             img_bytes = base64.b64decode(image_data)
         else:
             raise ValueError("base64 must be str")
-    else:
-        img_bytes = image_data               # bytes
+    else:  # source_type == "bytes"
+        if isinstance(image_data, bytes):
+            img_bytes = image_data
+        else:
+            raise ValueError("bytes source_type requires bytes input")
 
     img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
     buf = io.BytesIO(); img.save(buf, "JPEG", quality=95)
@@ -65,18 +75,21 @@ def _upload_to_s3(image_data: bytes | str, *, source_type: str = "base64") -> st
         Bucket=s3_bucket,
         Key=key,
         ACL='public-read',
-        ContentType='image/jpeg'
     )
-    return f"{s3_endpoint.rstrip('/')}/{s3_bucket}/{key}"   
+    return f"{s3_endpoint.rstrip('/')}/{s3_bucket}/{key}"
 
 # ──────────────────────────────────────────────────────────────────────
-#  utils
+#  utils: base64 ⇄ cv2
 # ──────────────────────────────────────────────────────────────────────
 def _b64_to_cv2(b64: str) -> np.ndarray:
     if b64.startswith("data:image"):
         b64 = b64.split(",", 1)[1]
-    return cv2.imdecode(np.frombuffer(base64.b64decode(b64), np.uint8),
-                        cv2.IMREAD_COLOR)
+    data = base64.b64decode(b64)
+    return cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
+
+def _cv2_to_png_bytes(mask: np.ndarray) -> bytes:
+    _, buf = cv2.imencode(".png", mask)
+    return buf.tobytes()
 
 def _get_pose_keypoints(img_b64: str, img_bgr: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Получает ключевые точки позы используя ControlNet OpenPose."""
@@ -141,10 +154,9 @@ def _get_pose_keypoints(img_b64: str, img_bgr: np.ndarray) -> tuple[np.ndarray, 
             keypoints[:, 0] *= sx
             keypoints[:, 1] *= sy
         else:
-            # fallback – максимумы по PNG (как было)
             keypoints = []
             for _ in range(17):
-                ...
+                keypoints.append(0)
             keypoints = np.array(keypoints, dtype=np.float32)
 
         return keypoints.astype(int), box_xyxy
@@ -155,197 +167,130 @@ def _get_pose_keypoints(img_b64: str, img_bgr: np.ndarray) -> tuple[np.ndarray, 
         raise ValueError(f"Failed to process pose detection: {str(e)}")
 
 # ──────────────────────────────────────────────────────────────────────
-#  main mask generator
+#  generate_body_mask: MediaPipe segmentation + FaceMesh head removal
 # ──────────────────────────────────────────────────────────────────────
-def generate_body_mask(img_b64: str, dilate_size: int = 0) -> tuple[str, dict]:
+def generate_body_mask(img_b64: str, dilate_size: int = 15) -> tuple[str, dict]:
     img_bgr = _b64_to_cv2(img_b64)
     h, w = img_bgr.shape[:2]
 
-    # 1) детектим keypoints + bbox как раньше
-    keypts, box_xyxy = _get_pose_keypoints(img_b64, img_bgr)
-    x1, y1, x2, y2 = box_xyxy
-    crop = img_bgr[y1:y2, x1:x2]
-    crop_h, crop_w = crop.shape[:2]
+    # Full-body mask via SelfieSegmentation
+    rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+    seg_res = mp_seg.process(rgb)
+    mask_body = (seg_res.segmentation_mask > 0.5).astype(np.uint8)
 
-    # 2) передаём crop в predictor
-    predictor.set_image(crop)
+    # Head mask via FaceMesh (circle around forehead)
+    mask_head = np.zeros_like(mask_body, dtype=np.uint8)
+    face_res = mp_face.process(rgb)
+    if face_res.multi_face_landmarks:
+        lm = face_res.multi_face_landmarks[0].landmark
+        x_f, y_f = int(lm[10].x * w), int(lm[10].y * h)
+        x_c, y_c = int(lm[152].x * w), int(lm[152].y * h)
+        r = int(np.hypot(x_c - x_f, y_c - y_f) * 1.1)
+        cv2.circle(mask_head, (x_f, y_f), r, 1, -1)
 
-    # box в координатах crop: весь прямоугольник от (0,0) до (crop_w, crop_h)
-    input_box = np.array([[0, 0, crop_w, crop_h]])
-    masks, scores, logits = predictor.predict(
-        box=input_box,
-        multimask_output=False
-    )
-    # единственная маска тела
-    body_mask = masks[0].astype(bool)
+    # Subtract head
+    mask_final = cv2.bitwise_and(mask_body, cv2.bitwise_not(mask_head))
 
-    # 3) убираем голову+волосы: рисуем круг/овал по keypoints
-    # создаём маску головы в crop-координатах
-    head_pts = keypts[[0,1,2,3,4]] - np.array([x1, y1])  # переносим в координаты crop
-    valid = (head_pts[:,0]>0)&(head_pts[:,1]>0)
-    head_mask = np.zeros_like(body_mask, dtype=bool)
-    if valid.any():
-        hp = head_pts[valid]
-        cx, cy = hp[:,0].mean(), hp[:,1].mean()
-        radius = max(hp[:,0].ptp(), hp[:,1].ptp()) * 0.6
-        cv2.circle(head_mask, (int(cx),int(cy)), int(radius), 1, -1)
+    # Optional dilation
+    if dilate_size and dilate_size > 0:
+        kernel = np.ones((dilate_size, dilate_size), np.uint8)
+        mask_final = cv2.dilate(mask_final, kernel, iterations=1)
 
-    # итоговая маска корпуса без головы
-    final_crop = body_mask & ~head_mask
+    # Upload
+    png = _cv2_to_png_bytes((mask_final * 255).astype(np.uint8))
+    url = _upload_to_s3(png, source_type='bytes')
+    debug = {
+        "dilate_size": dilate_size,
+        "face_detected": bool(face_res.multi_face_landmarks)
+    }
+    return url, debug
 
-    # 4) опционально дилатация
-    if dilate_size>0:
-        final_crop = cv2.dilate(final_crop.astype(np.uint8),
-                                np.ones((dilate_size, dilate_size), np.uint8),
-                                iterations=1).astype(bool)
-
-    # 5) кладём обратно на full-size
-    full_mask = np.zeros((h, w), dtype=np.uint8)
-    full_mask[y1:y2, x1:x2] = final_crop.astype(np.uint8) * 255
-
-    # 6) загрузка и отладка
-    _, png = cv2.imencode('.png', full_mask)
-    url = _upload_to_s3(png.tobytes(), source_type='bytes')
-    dbg = {'bbox': box_xyxy.tolist(), 'head_cut': True}
-    return url, dbg
-# ============================================================
-# Proxy / request router
-# ============================================================
+# ──────────────────────────────────────────────────────────────────────
+#  Proxy / request router
+# ──────────────────────────────────────────────────────────────────────
+def _maybe_fetch(val):
+    if isinstance(val, str) and val.startswith(("http://", "https://")):
+        resp = requests.get(val, timeout=10)
+        resp.raise_for_status()
+        return base64.b64encode(resp.content).decode()
+    return val
 
 def _process_sd_results(response_data):
     """
     Обрабатывает результаты от SD API, загружает изображения в S3 и возвращает обновленный ответ.
     """
     try:
-        # Проверяем разные форматы ответа
-        images = None
-        
-        # Проверяем вложенную структуру в output.images (основной формат)
+        imgs = None
         if 'output' in response_data and isinstance(response_data['output'], dict):
-            output = response_data['output']
-            if 'images' in output and isinstance(output['images'], list):
-                images = output['images']
-        
-        # Проверяем корневое поле images (альтернативный формат)
-        if not images and 'images' in response_data and isinstance(response_data['images'], list):
-            images = response_data['images']
-            
-        # Если нашли изображения, обрабатываем их
-        if images and len(images) > 0:
-            uploaded_images = []
-            for i, img_data in enumerate(images):
-                url = _upload_to_s3(img_data)
-                uploaded_images.append(url)
-                
-            # Добавляем URL в оба формата для совместимости
-            if 'output' in response_data and isinstance(response_data['output'], dict):
-                response_data['output']['images'] = uploaded_images
+            out = response_data['output']
+            if 'images' in out and isinstance(out['images'], list):
+                imgs = out['images']
+        if not imgs and 'images' in response_data and isinstance(response_data['images'], list):
+            imgs = response_data['images']
+        if imgs:
+            uploaded = []
+            for data in imgs:
+                # data may be base64
+                img_b64 = data if data.startswith("data:image") else f"data:image/png;base64,{data}"
+                cv2_img = _b64_to_cv2(img_b64)
+                _, buf = cv2.imencode(".jpg", cv2_img, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
+                uploaded.append(_upload_to_s3(buf.tobytes(), source_type='bytes'))
+            if 'output' in response_data:
+                response_data['output']['images'] = uploaded
             else:
-                response_data['images'] = uploaded_images
-                
-            # Добавляем поле с первым URL для легкого доступа
-            response_data['result_url'] = uploaded_images[0] if uploaded_images else None
-            
+                response_data['images'] = uploaded
+            response_data['result_url'] = uploaded[0]
         return response_data
-    except Exception as e:
-        return {"error": f"Failed to process SD results: {e}", "original_response": response_data}
-
+    except Exception:
+        return response_data
 
 def _process_sam_results(response_data):
-    """
-    Обрабатывает результаты от SAM API, загружает маски в S3 и возвращает обновленный ответ.
-    """
+    # Similar to SD results, but for SAM-style masks lists
     try:
-        # Проверяем вложенную структуру в output
-        if 'output' in response_data and isinstance(response_data['output'], dict):
-            output = response_data['output']
-            # Проходим по всем возможным ключам с масками
-            for key in ['masks', 'masked_images', 'blended_images']:
-                if key in output and output[key]:
-                    masks = output[key]
-                    if isinstance(masks, list) and masks:
-                        uploaded_masks = []
-                        for i, mask_data in enumerate(masks):
-                            url = _upload_to_s3(mask_data)
-                            uploaded_masks.append(url)
-                        # Обновляем маски в output
-                        output[key] = uploaded_masks
-                        # Добавляем поле result_url для легкого доступа
-                        if 'result_url' not in response_data:
-                            response_data['result_url'] = uploaded_masks[-1] if uploaded_masks else None
-        
-        # Для обратной совместимости проверяем также корневые поля
-        for key in ['masks', 'masked_images', 'blended_images']:
-            if key in response_data and response_data[key]:
-                masks = response_data[key]
-                if isinstance(masks, list) and masks:
-                    uploaded_masks = []
-                    for i, mask_data in enumerate(masks):
-                        url = _upload_to_s3(mask_data)
-                        uploaded_masks.append(url)
-                    # Обновляем маски в корневом поле
-                    response_data[key] = uploaded_masks
-                    # Добавляем поле result_url для легкого доступа если его еще нет
-                    if 'result_url' not in response_data:
-                        response_data['result_url'] = uploaded_masks[-1] if uploaded_masks else None
-        
+        out = response_data.get('output', {})
+        for key in ('masks','masked_images','blended_images'):
+            if key in out and isinstance(out[key], list):
+                uploaded = []
+                for data in out[key]:
+                    img_b64 = data if data.startswith("data:image") else f"data:image/png;base64,{data}"
+                    cv2_img = _b64_to_cv2(img_b64)
+                    _, buf = cv2.imencode(".png", cv2_img)
+                    uploaded.append(_upload_to_s3(buf.tobytes(), source_type='bytes'))
+                out[key] = uploaded
+                response_data['result_url'] = uploaded[-1]
         return response_data
-    except Exception as e:
-        return {"error": f"Failed to process SAM results: {e}", "original_response": response_data}
+    except Exception:
+        return response_data
 
 def process_request(job: dict):
-    input_data = job.get("input", {})
-    path = input_data.get("path", "")
-    params = input_data.get("params", {})
+    inp = job.get("input", {})
+    path = inp.get("path", "")
+    params = inp.get("params", {})
 
-    # Fast mask endpoint
     if path == "fast-mask/body":
         img_src = params.get("input_image")
         if not img_src:
             return {"error": "'input_image' is required"}
-        if img_src.startswith("http://") or img_src.startswith("https://"):
-            r = requests.get(img_src, timeout=10)
-            r.raise_for_status()
-            img_b64 = base64.b64encode(r.content).decode()
-        else:
-            img_b64 = img_src
+        # convert URL→base64 if needed
+        img_src = _maybe_fetch(img_src)
         try:
-            dilate_size = int(params.get("dilate_size", 15))
-            url, dbg = generate_body_mask(img_b64, dilate_size)
+            dil = int(params.get("dilate_size", 15))
+            url, dbg = generate_body_mask(img_src, dil)
             return {"result_url": url, "debug": dbg}
         except Exception as e:
             return {"error": str(e)}
 
-    # ---- other paths: proxy to local WebUI ----
+    # proxy all other requests to local AUTOMATIC1111 WebUI
+    # fetch any URL fields
     if not path:
         return {"error": "Missing 'path' in input"}
-    # Автоматическая конвертация URL-изображений в base64 для всех полей image/images
-    def _maybe_fetch(val):
-        if isinstance(val, str) and val.startswith(("http://", "https://")):
-            resp = requests.get(val)
-            resp.raise_for_status()
-            return base64.b64encode(resp.content).decode()
-        return val
+    for k, v in list(params.items()):
+        lk = k.lower()
+        if (lk.endswith("image") or lk == "mask") and isinstance(v, str):
+            params[k] = _maybe_fetch(v)
+        elif lk.endswith("images") and isinstance(v, list):
+            params[k] = [_maybe_fetch(x) for x in v]
 
-    for key, val in list(params.items()):
-        lk = key.lower()
-        # одиночные поля, оканчивающиеся на image
-        if (lk.endswith('image') or lk == 'mask') and isinstance(val, str):
-            try:
-                params[key] = _maybe_fetch(val)
-            except Exception as e:
-                return {"error": f"Failed to fetch '{key}': {e}"}
-        # списки изображений, оканчивающиеся на images
-        elif lk.endswith('images') and isinstance(val, list):
-            new_list = []
-            for item in val:
-                try:
-                    new_list.append(_maybe_fetch(item))
-                except Exception as e:
-                    return {"error": f"Failed to fetch element of '{key}': {e}"}
-            params[key] = new_list
-
-    # Добавляем ControlNet для txt2img и img2img
     if path in ["sdapi/v1/txt2img", "sdapi/v1/img2img"]:
         # Получаем исходное изображение
         input_image = params.get("init_images", [None])[0] if path == "sdapi/v1/img2img" else None
@@ -414,19 +359,14 @@ def process_request(job: dict):
                     }
                 }
 
-    # Build local URL
     local_url = f"http://127.0.0.1:7860/{path.lstrip('/')}"
     try:
-        resp = requests.post(local_url, json=params)
+        resp = requests.post(local_url, json=params, timeout=60)
         resp.raise_for_status()
         result = resp.json()
-        
-        # Обработка результатов - загрузка в S3 и получение URL
         if 'sdapi/v1' in path:
-            # Обработка результатов SD API
             result = _process_sd_results(result)
         elif 'sam' in path:
-            # Обработка результатов SAM API
             result = _process_sam_results(result)
         elif 'controlnet' in path:
             # Обработка результатов ControlNet API
