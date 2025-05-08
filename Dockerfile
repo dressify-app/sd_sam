@@ -52,9 +52,10 @@ RUN mkdir -p extensions/sd-webui-controlnet/models && \
         -o extensions/sd-webui-controlnet/models/control_v11p_sd15_pose.pth
 
 # ----------------------------------------------------------------------
-#  PYTHON DEPS
+#  PYTHON DEPS (добавили mediapipe)
 # ----------------------------------------------------------------------
 RUN pip install --no-cache-dir \
+        mediapipe \
         git+https://github.com/facebookresearch/segment-anything.git \
         opencv-python-headless \
         pillow torchvision \
