@@ -341,12 +341,38 @@ def process_request(job: dict):
                         "input_image": canny_result["images"][0],
                         "module": "canny",
                         "model": "control_v11p_sd15_canny",
-                        "weight": 0.4,  # Меньший вес для сохранения цвета
+                        "weight": 0.3,  # Ещё уменьшаем вес для лучшего сохранения цвета
                         "resize_mode": "Resize and Fill",
                         "lowvram": False,
                         "processor_res": 512,
                         "threshold_a": 100,
                         "threshold_b": 200,
+                        "guidance_start": 0.0,
+                        "guidance_end": 1.0,
+                        "control_mode": "Balanced"
+                    })
+                    
+            # Добавляем ControlNet для мягких краёв для лучшего соединения шеи
+            softedge_response = requests.post(
+                "http://127.0.0.1:7860/controlnet/detect",
+                json={
+                    "controlnet_module": "softedge",
+                    "controlnet_input_images": [input_image]
+                }
+            )
+            if softedge_response.ok:
+                softedge_result = softedge_response.json()
+                if "images" in softedge_result:
+                    controlnet_units.append({
+                        "input_image": softedge_result["images"][0],
+                        "module": "softedge",
+                        "model": "control_v11p_sd15_softedge",
+                        "weight": 0.4,
+                        "resize_mode": "Resize and Fill",
+                        "lowvram": False,
+                        "processor_res": 512,
+                        "threshold_a": 64,
+                        "threshold_b": 64,
                         "guidance_start": 0.0,
                         "guidance_end": 1.0,
                         "control_mode": "Balanced"
@@ -371,7 +397,7 @@ def process_request(job: dict):
                             "input_image": pose_result["images"][0],
                             "module": "openpose",
                             "model": "control_v11p_sd15_pose",
-                            "weight": 0.75,  # Немного уменьшаем вес
+                            "weight": 0.65,  # Ещё немного уменьшаем вес
                             "resize_mode": "Resize and Fill",
                             "lowvram": False,
                             "processor_res": 512,
@@ -390,7 +416,7 @@ def process_request(job: dict):
                             "input_image": pose_result["images"][0],
                             "module": "openpose",
                             "model": "control_v11p_sd15_pose",
-                            "weight": 0.75,  # Немного уменьшаем вес
+                            "weight": 0.65,  # Ещё немного уменьшаем вес
                             "resize_mode": "Resize and Fill",
                             "lowvram": False,
                             "processor_res": 512,
@@ -416,22 +442,33 @@ def process_request(job: dict):
                 "CLIP_stop_at_last_layers": 1,
                 "img2img_fix_steps": True,
                 "img2img_color_correction": True,  # Включаем коррекцию цвета
-                "img2img_background_color": "white"
+                "img2img_background_color": "white",
+                "sd_vae": "None"  # Отключаем VAE для лучшего сохранения цвета
             })
 
             # Добавляем промпт для сохранения анатомии и цвета кожи
+            skin_tone_prompts = ["natural skin tone", "detailed skin texture", "seamless neck connection"]
             if "prompt" in params:
-                params["prompt"] += ", perfect anatomy, correct body proportions, natural pose, natural skin tone, detailed skin texture"
+                params["prompt"] += ", perfect anatomy, correct body proportions, natural pose, " + ", ".join(skin_tone_prompts)
+            
+            negative_prompts = ["deformed anatomy", "bad anatomy", "wrong proportions", "unnatural pose", 
+                              "wrong skin color", "unnatural skin tone", "neck seam", "discontinuous neck"]
             if "negative_prompt" in params:
-                params["negative_prompt"] += ", deformed anatomy, bad anatomy, wrong proportions, unnatural pose, wrong skin color, unnatural skin tone"
+                params["negative_prompt"] += ", " + ", ".join(negative_prompts)
             else:
-                params["negative_prompt"] = "deformed anatomy, bad anatomy, wrong proportions, unnatural pose, wrong skin color, unnatural skin tone"
+                params["negative_prompt"] = ", ".join(negative_prompts)
 
             # Уменьшаем denoising strength для лучшего сохранения цвета
             if "denoising_strength" not in params:
-                params["denoising_strength"] = 0.5
+                params["denoising_strength"] = 0.4  # Ещё меньше для лучшего сохранения цвета
             else:
-                params["denoising_strength"] = min(params["denoising_strength"], 0.5)
+                params["denoising_strength"] = min(params["denoising_strength"], 0.4)
+
+            # Обеспечиваем достаточное количество шагов для качественного результата
+            if "steps" not in params:
+                params["steps"] = 25
+            else:
+                params["steps"] = max(params["steps"], 25)
 
     local_url = f"http://127.0.0.1:7860/{path.lstrip('/')}"
     try:
