@@ -59,7 +59,7 @@ def _upload_to_s3(image_data: bytes | str, *, source_type: str = "base64") -> st
         ACL='public-read',
         ContentType='image/jpeg'
     )
-    return f"{s3_endpoint.rstrip('/')}/{s3_bucket}/{key}"
+    return f"{s3_endpoint.rstrip('/')}/{s3_bucket}/{key}"   
 
 # ──────────────────────────────────────────────────────────────────────
 #  Models
@@ -190,22 +190,46 @@ def generate_body_mask(img_b64: str, dilate_size: int = 0) -> tuple[str, dict]:
             if 0 <= y - y1 < seg.shape[0] and 0 <= x - x1 < seg.shape[1]:
                 ok += bool(seg[int(y - y1), int(x - x1)])
         return ok >= thresh
+    
+    # ──────────────────────────────────────────────────
+    # helpers
+    # ──────────────────────────────────────────────────
+    def _seg_iou(seg: np.ndarray) -> float:
+        """IoU сегмента с его bounding-box – мера «заполненности»."""
+        ys, xs = np.where(seg)
+        if xs.size == 0:                       # пустой сегмент
+            return 0.0
+        x1, y1, x2, y2 = xs.min(), ys.min(), xs.max(), ys.max()
+        inter  = seg.sum()
+        union  = (x2 - x1 + 1) * (y2 - y1 + 1)
+        return inter / union                   # 0‥1
 
-    candidates = []
-    for m in masks:
-        seg = m["segmentation"]
-        if m["area"] > crop_area * 0.80:  # отбрасываем почти‑фон
-            continue
-        if _kp_covered(seg, keypts):
-            candidates.append(seg)
+    def _best_body_mask(masks, keypts, y1, x1,
+                        min_kp=4, min_iou=0.35, top_n=3):
+        """
+        Возвращает объединённую маску из top_n сегментов,
+        удовлетворяющих критериям keypoints & IoU.
+        """
+        good = []
+        for m in masks:
+            seg = m["segmentation"]
+            if _kp_covered(seg, keypts, min_kp) and _seg_iou(seg) >= min_iou:
+                good.append(seg)
 
-    if candidates:
-        body_mask = np.zeros_like(candidates[0], dtype=bool)
-        for seg in candidates: body_mask |= seg
-    else:
-        m_sorted = sorted(masks, key=lambda m: m["area"], reverse=True)
-        body_mask = m_sorted[1]["segmentation"] if len(m_sorted) > 1 else m_sorted[0]["segmentation"]
-    body_mask = body_mask.astype(bool)
+        if not good:                           # fallback – самый большой
+            good = [max(masks, key=lambda z: z["area"])["segmentation"]]
+
+        # сортируем по площади, берём top-n и делаем union
+        good = sorted(good, key=lambda s: s.sum(), reverse=True)[:top_n]
+        merged = np.logical_or.reduce(good)
+        return merged.astype(bool)
+
+    body_mask = _best_body_mask(
+        masks, keypts, y1, x1,
+        min_kp = 4,        # сколько keypoints нужно «накрыть»
+        min_iou = 0.35,    # насколько сегмент заполнен внутри bbox
+        top_n = 3          # сколько лучших сегментов объединяем
+    )
 
     # ──────────────────────────────────────────────────────────────────────
     # 3.  Строим маску "запретных" зон: head+hair и shoes
