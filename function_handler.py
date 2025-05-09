@@ -193,9 +193,18 @@ def generate_body_mask(img_b64: str, dilate_size: int = 15) -> tuple[str, dict]:
     mask_final = cv2.bitwise_and(mask_body, cv2.bitwise_not(mask_head))
 
     # Optional dilation
-    if dilate_size and dilate_size > 0:
-        kernel = np.ones((dilate_size, dilate_size), np.uint8)
-        mask_final = cv2.dilate(mask_final, kernel, iterations=1)
+    # 1) Сглаживаем float-маску
+    prob = cv2.GaussianBlur(seg_res.segmentation_mask, (11,11), 0)
+    mask_body = (prob > 0.5).astype(np.uint8)
+
+    # 2) Морфологическое закрытие + дилатация «круглым» ядром
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (dilate_size, dilate_size))
+    mask_closed = cv2.morphologyEx(mask_body, cv2.MORPH_CLOSE, kernel)
+    mask_dilated = cv2.dilate(mask_closed, kernel, iterations=1)
+
+    # 3) Медианный фильтр для финального шейпа
+    mask_8u = (mask_dilated * 255).astype(np.uint8)
+    mask_final = (cv2.medianBlur(mask_8u, 5) > 128).astype(np.uint8)
 
     # Upload
     png = _cv2_to_png_bytes((mask_final * 255).astype(np.uint8))
