@@ -201,13 +201,12 @@ def smooth_body_mask(segmentation_mask: np.ndarray,
                              cv2.MORPH_CLOSE,
                              kernel,
                              iterations=2)
-    mask_dilated = cv2.dilate(mask2, kernel, iterations=1)
 
     # 5) Контурная аппроксимация для сглаживания кривой
-    contours, _ = cv2.findContours((mask_dilated*255).astype(np.uint8),
+    contours, _ = cv2.findContours((mask2*255).astype(np.uint8),
                                    cv2.RETR_EXTERNAL,
                                    cv2.CHAIN_APPROX_NONE)
-    mask3 = np.zeros_like(mask_dilated)
+    mask3 = np.zeros_like(mask2)
     for cnt in contours:
         epsilon = 0.0025 * cv2.arcLength(cnt, True)
         smooth_cnt = cv2.approxPolyDP(cnt, epsilon, True)
@@ -236,6 +235,8 @@ def generate_body_mask(img_b64: str, dilate_size: int = 15) -> tuple[str, dict]:
         blur_size=15,               # можно настроить
         med_blur=5                  # можно настроить
     )
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (dilate_size, dilate_size))
+    mask_body = cv2.dilate(mask_body, kernel, iterations=1)
 
     # Head mask via FaceMesh (circle around forehead)
     mask_head = np.zeros_like(mask_body, dtype=np.uint8)
@@ -517,7 +518,7 @@ def process_request(job: dict):
             negative_prompts_list = [
                 "deformed anatomy", "bad anatomy", "wrong proportions", "unnatural pose", 
                 "wrong skin color", "unnatural skin tone", "changed skin tone", "skin tone mismatch with original",
-                "neck seam", "discontinuous neck", "weird clothing",
+                "neck seam", "discontinuous neck", "weird clothing", "incomplete clothing",
                 "distorted body", "malformed limbs", "extra limbs"
             ]
 
