@@ -397,7 +397,7 @@ def process_request(job: dict):
                             "input_image": pose_result["images"][0],
                             "module": "openpose",
                             "model": "control_v11p_sd15_pose",
-                            "weight": 0.85,  # Увеличиваем вес для лучшей анатомии
+                            "weight": 0.9,  # Увеличиваем вес для лучшей анатомии
                             "resize_mode": "Resize and Fill",
                             "lowvram": False,
                             "processor_res": 512,
@@ -443,7 +443,7 @@ def process_request(job: dict):
                 "img2img_fix_steps": True,
                 "img2img_color_correction": True,  # Включаем коррекцию цвета
                 "img2img_background_color": "white",
-                "sd_vae": "None"  # Отключаем VAE для лучшего сохранения цвета
+                "inpaint_only_masked": True,
             })
 
             # Добавляем промпт для сохранения анатомии и цвета кожи
@@ -451,6 +451,11 @@ def process_request(job: dict):
             skin_specific_positive_prompts = [
                 "preserve original skin tone and texture", "detailed skin texture", "seamless neck connection",
                 "anatomically correct" # anatomically correct лучше здесь, чем в общем
+            ]
+
+            # положительные подсказки
+            skin_specific_positive_prompts += [
+                "five fingers", "realistic hands", "anatomically correct hands"
             ]
             
             current_prompt = params.get("prompt", "")
@@ -463,21 +468,27 @@ def process_request(job: dict):
                 "neck seam", "discontinuous neck", 
                 "distorted body", "malformed limbs", "extra limbs"
             ]
+
+            # негативные подсказки
+            negative_prompts_list += [
+                "extra fingers", "more than five fingers", "mutated hands",
+                "deformed hands", "long fingers", "weird fingers"
+            ]
             
             current_negative_prompt = params.get("negative_prompt", "")
             params["negative_prompt"] = current_negative_prompt + ", " + ", ".join(part for part in negative_prompts_list if part)
 
             # Оптимальный denoising strength для баланса между анатомией и цветом
             if "denoising_strength" not in params:
-                params["denoising_strength"] = 0.35  # Уменьшаем для лучшего сохранения исходного цвета
+                params["denoising_strength"] = 0.2  # Уменьшаем для лучшего сохранения исходного цвета
             else:
-                params["denoising_strength"] = min(params.get("denoising_strength", 0.35), 0.35)
+                params["denoising_strength"] = min(params.get("denoising_strength", 0.2), 0.2)
 
             # Обеспечиваем достаточное количество шагов для качественного результата
             if "steps" not in params:
-                params["steps"] = 30  # Увеличиваем количество шагов
+                params["steps"] = 20  # Увеличиваем количество шагов
             else:
-                params["steps"] = max(params["steps"], 30)
+                params["steps"] = max(params["steps"], 20)
                 
             # Добавляем цветокоррекцию для бледной кожи
             if "sampler_name" not in params:
