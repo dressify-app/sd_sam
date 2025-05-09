@@ -234,7 +234,7 @@ def generate_body_mask(img_b64: str, dilate_size: int = 15, full_body_dress: boo
 
     # 2. Отдельно «раздуваем» маску одежды, но НЕ за пределы person_mask
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (dilate_size, dilate_size))
-    clothing_mask = cv2.dilate(person_mask, kernel, iterations=2)
+    clothing_mask = cv2.dilate(person_mask, kernel, iterations=4)
 
     # 3. Чтобы одежда не вышла за силуэт, обрезаем:
     clothing_mask = cv2.bitwise_and(clothing_mask, person_mask)
@@ -328,7 +328,7 @@ def process_request(job: dict):
     path = inp.get("path", "")
     params = inp.get("params", {})
     full_body_dress = params.get("full_body_dress", False)
-    
+
     if path == "fast-mask/body":
         img_src = params.get("input_image")
         if not img_src:
