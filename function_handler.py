@@ -219,27 +219,34 @@ def smooth_body_mask(segmentation_mask: np.ndarray,
     return mask_final
 
 
-def generate_body_mask(img_b64: str, dilate_size: int = 15) -> tuple[str, dict]:
+def generate_body_mask(img_b64: str, dilate_size: int = 15, full_body_dress: bool = False) -> tuple[str, dict]:
     img_bgr = _b64_to_cv2(img_b64)
     h, w = img_bgr.shape[:2]
 
     # Full-body mask via SelfieSegmentation
     rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
-    # 1) сначала получаем float-мапу
+    # 1. Получаем и сглаживаем person_mask
     seg_res = mp_seg.process(rgb)
+    person_mask = smooth_body_mask(seg_res.segmentation_mask,
+                               dilate_size=0,   # без «среза» краёв
+                               blur_size=21,
+                               med_blur=7)
 
-    # 2) применяем наш smooth-пайплайн
-    mask_body = smooth_body_mask(
-        segmentation_mask=seg_res.segmentation_mask,
-        dilate_size=dilate_size,    # или любое ваше значение
-        blur_size=11,               # можно настроить
-        med_blur=7                # можно настроить
-    )
+    # 2. Отдельно «раздуваем» маску одежды, но НЕ за пределы person_mask
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (dilate_size, dilate_size))
-    mask_body = cv2.dilate(mask_body, kernel, iterations=2)
+    clothing_mask = cv2.dilate(person_mask, kernel, iterations=2)
+
+    # 3. Чтобы одежда не вышла за силуэт, обрезаем:
+    clothing_mask = cv2.bitwise_and(clothing_mask, person_mask)
+
+    # 4. Если нужно платье на всю длину — используем просто person_mask:
+    if full_body_dress:
+        inpaint_mask = person_mask
+    else:
+        inpaint_mask = clothing_mask
 
     # Head mask via FaceMesh (circle around forehead)
-    mask_head = np.zeros_like(mask_body, dtype=np.uint8)
+    mask_head = np.zeros_like(inpaint_mask, dtype=np.uint8)
     face_res = mp_face.process(rgb)
     if face_res.multi_face_landmarks:
         lm = face_res.multi_face_landmarks[0].landmark
@@ -249,7 +256,7 @@ def generate_body_mask(img_b64: str, dilate_size: int = 15) -> tuple[str, dict]:
         cv2.circle(mask_head, (x_f, y_f), r, 1, -1)
 
     # Subtract head
-    mask_final = cv2.bitwise_and(mask_body, cv2.bitwise_not(mask_head))
+    mask_final = cv2.bitwise_and(inpaint_mask, cv2.bitwise_not(mask_head))
     # Upload
     png = _cv2_to_png_bytes((mask_final * 255).astype(np.uint8))
     url = _upload_to_s3(png, source_type='bytes')
@@ -320,7 +327,8 @@ def process_request(job: dict):
     inp = job.get("input", {})
     path = inp.get("path", "")
     params = inp.get("params", {})
-
+    full_body_dress = params.get("full_body_dress", False)
+    
     if path == "fast-mask/body":
         img_src = params.get("input_image")
         if not img_src:
@@ -329,7 +337,7 @@ def process_request(job: dict):
         img_src = _maybe_fetch(img_src)
         try:
             dil = int(params.get("dilate_size", 15))
-            url, dbg = generate_body_mask(img_src, dil)
+            url, dbg = generate_body_mask(img_src, dil, full_body_dress)
             return {"result_url": url, "debug": dbg}
         except Exception as e:
             return {"error": str(e)}
