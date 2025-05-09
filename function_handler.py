@@ -236,7 +236,7 @@ def generate_body_mask(img_b64: str, dilate_size: int = 15) -> tuple[str, dict]:
         med_blur=5                  # можно настроить
     )
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (dilate_size, dilate_size))
-    mask_body = cv2.dilate(mask_body, kernel, iterations=1)
+    mask_body = cv2.dilate(mask_body, kernel, iterations=2)
 
     # Head mask via FaceMesh (circle around forehead)
     mask_head = np.zeros_like(mask_body, dtype=np.uint8)
