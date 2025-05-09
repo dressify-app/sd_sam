@@ -170,27 +170,74 @@ def _get_pose_keypoints(img_b64: str, img_bgr: np.ndarray) -> tuple[np.ndarray, 
 # ──────────────────────────────────────────────────────────────────────
 #  generate_body_mask: MediaPipe segmentation + FaceMesh head removal
 # ──────────────────────────────────────────────────────────────────────
+def smooth_body_mask(segmentation_mask: np.ndarray,
+                     dilate_size: int = 15,
+                     blur_size: int = 21,
+                     med_blur: int = 7) -> np.ndarray:
+    """
+    Принимаем float-маску (0..1), возвращаем бинарную маску (0/1)
+    с плавными краями.
+    """
+
+    # 1) Большой Гауссов размыв исходной вероятностной карты
+    prob = cv2.GaussianBlur(segmentation_mask, (blur_size, blur_size), 0)
+
+    # 2) Адаптивный порог: автоматически подберём порог Otsu (более устойчив)
+    _, mask0 = cv2.threshold((prob*255).astype(np.uint8),
+                             0, 255,
+                             cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    mask0 = (mask0//255).astype(np.uint8)
+
+    # 3) Морфологическое открытие, чтобы убрать мелкие «выступы»
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE,
+                                       (dilate_size//2, dilate_size//2))
+    mask1 = cv2.morphologyEx(mask0,
+                             cv2.MORPH_OPEN,
+                             kernel,
+                             iterations=2)
+
+    # 4) Морфологическое закрытие, чтобы заполнить «впадины»
+    mask2 = cv2.morphologyEx(mask1,
+                             cv2.MORPH_CLOSE,
+                             kernel,
+                             iterations=2)
+
+    # 5) Контурная аппроксимация для сглаживания кривой
+    contours, _ = cv2.findContours((mask2*255).astype(np.uint8),
+                                   cv2.RETR_EXTERNAL,
+                                   cv2.CHAIN_APPROX_NONE)
+    mask3 = np.zeros_like(mask2)
+    for cnt in contours:
+        epsilon = 0.0025 * cv2.arcLength(cnt, True)
+        smooth_cnt = cv2.approxPolyDP(cnt, epsilon, True)
+        cv2.drawContours(mask3, [smooth_cnt], -1, 1, thickness=cv2.FILLED)
+
+    # 6) Финальный медианный фильтр для “тона” маски
+    mask4 = cv2.medianBlur((mask3*255).astype(np.uint8), med_blur)
+    mask_final = (mask4 > 128).astype(np.uint8)
+
+    return mask_final
+
+
 def generate_body_mask(img_b64: str, dilate_size: int = 15) -> tuple[str, dict]:
     img_bgr = _b64_to_cv2(img_b64)
     h, w = img_bgr.shape[:2]
+
+    # Full-body mask via SelfieSegmentation
     rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
-
-    # 1) Сглаживаем float-маску
+    # 1) сначала получаем float-мапу
     seg_res = mp_seg.process(rgb)
-    prob = cv2.GaussianBlur(seg_res.segmentation_mask, (11,11), 0)
-    mask_body = (prob > 0.5).astype(np.uint8)
 
-    # 2) Морфологическое закрытие + дилатация «круглым» ядром
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (dilate_size, dilate_size))
-    mask_closed = cv2.morphologyEx(mask_body, cv2.MORPH_CLOSE, kernel)
-    mask_dilated = cv2.dilate(mask_closed, kernel, iterations=1)
+    # 2) применяем наш smooth-пайплайн
+    mask_body = smooth_body_mask(
+        segmentation_mask=seg_res.segmentation_mask,
+        dilate_size=dilate_size,    # или любое ваше значение
+        blur_size=21,               # можно настроить
+        med_blur=7                  # можно настроить
+    )
 
-    # 3) Медианный фильтр
-    mask_8u = (mask_dilated * 255).astype(np.uint8)
-    mask_smooth = (cv2.medianBlur(mask_8u, 5) > 128).astype(np.uint8)
-
-    # 4) Генерируем mask_head
-    mask_head = np.zeros_like(mask_smooth, dtype=np.uint8)
+    # Head mask via FaceMesh (circle around forehead)
+    mask_head = np.zeros_like(mask_body, dtype=np.uint8)
     face_res = mp_face.process(rgb)
     if face_res.multi_face_landmarks:
         lm = face_res.multi_face_landmarks[0].landmark
@@ -201,7 +248,6 @@ def generate_body_mask(img_b64: str, dilate_size: int = 15) -> tuple[str, dict]:
 
     # Subtract head
     mask_final = cv2.bitwise_and(mask_body, cv2.bitwise_not(mask_head))
-    
     # Upload
     png = _cv2_to_png_bytes((mask_final * 255).astype(np.uint8))
     url = _upload_to_s3(png, source_type='bytes')
