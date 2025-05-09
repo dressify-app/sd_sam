@@ -233,7 +233,7 @@ def generate_body_mask(img_b64: str, dilate_size: int = 15) -> tuple[str, dict]:
         segmentation_mask=seg_res.segmentation_mask,
         dilate_size=dilate_size,    # или любое ваше значение
         blur_size=11,               # можно настроить
-        med_blur=1                  # можно настроить
+        med_blur=7                # можно настроить
     )
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (dilate_size, dilate_size))
     mask_body = cv2.dilate(mask_body, kernel, iterations=2)
