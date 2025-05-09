@@ -213,7 +213,7 @@ def smooth_body_mask(segmentation_mask: np.ndarray,
         smooth_cnt = cv2.approxPolyDP(cnt, epsilon, True)
         cv2.drawContours(mask3, [smooth_cnt], -1, 1, thickness=cv2.FILLED)
 
-    # 6) Финальный медианный фильтр для “тона” маски
+    # 6) Финальный медианный фильтр для "тона" маски
     mask4 = cv2.medianBlur((mask3*255).astype(np.uint8), med_blur)
     mask_final = (mask4 > 128).astype(np.uint8)
 
@@ -233,7 +233,7 @@ def generate_body_mask(img_b64: str, dilate_size: int = 15) -> tuple[str, dict]:
     mask_body = smooth_body_mask(
         segmentation_mask=seg_res.segmentation_mask,
         dilate_size=dilate_size,    # или любое ваше значение
-        blur_size=16,               # можно настроить
+        blur_size=15,               # можно настроить
         med_blur=5                  # можно настроить
     )
 
@@ -468,7 +468,7 @@ def process_request(job: dict):
                             "input_image": pose_result["images"][0],
                             "module": "openpose",
                             "model": "control_v11p_sd15_pose",
-                            "weight": 0.85,  # Увеличиваем вес для лучшей анатомии
+                            "weight": 0.9,  # Увеличиваем вес для лучшей анатомии
                             "resize_mode": "Resize and Fill",
                             "lowvram": False,
                             "processor_res": 512,
@@ -517,14 +517,14 @@ def process_request(job: dict):
             negative_prompts_list = [
                 "deformed anatomy", "bad anatomy", "wrong proportions", "unnatural pose", 
                 "wrong skin color", "unnatural skin tone", "changed skin tone", "skin tone mismatch with original",
-                "neck seam", "discontinuous neck", 
+                "neck seam", "discontinuous neck", "weird clothing",
                 "distorted body", "malformed limbs", "extra limbs"
             ]
 
             # негативные подсказки
             negative_prompts_list += [
                 "extra fingers", "more than five fingers", "mutated hands",
-                "deformed hands", "long fingers", "weird fingers"
+                "deformed hands", "long fingers", "weird fingers", "fused legs", "merged thighs", "bad crotch anatomy"
             ]
             
             current_negative_prompt = params.get("negative_prompt", "")
