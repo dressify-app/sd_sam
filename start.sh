@@ -20,7 +20,7 @@ echo "Model weights are present and verified."
 # ------------------------------------------------------------
 echo "Starting Stable‑Diffusion WebUI (API only)…"
 export COMMANDLINE_ARGS="\
-  --api --listen --port 7860 \
+  --api --listen --port 7860 --nowebui \
   --xformers \
   --skip-version-check --skip-torch-cuda-test --skip-python-version-check \
   --no-hashing --disable-safe-unpickle \
