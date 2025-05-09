@@ -233,8 +233,8 @@ def generate_body_mask(img_b64: str, dilate_size: int = 15) -> tuple[str, dict]:
     mask_body = smooth_body_mask(
         segmentation_mask=seg_res.segmentation_mask,
         dilate_size=dilate_size,    # или любое ваше значение
-        blur_size=21,               # можно настроить
-        med_blur=7                  # можно настроить
+        blur_size=16,               # можно настроить
+        med_blur=5                  # можно настроить
     )
 
     # Head mask via FaceMesh (circle around forehead)
