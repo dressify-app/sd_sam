@@ -173,14 +173,24 @@ def _get_pose_keypoints(img_b64: str, img_bgr: np.ndarray) -> tuple[np.ndarray, 
 def generate_body_mask(img_b64: str, dilate_size: int = 15) -> tuple[str, dict]:
     img_bgr = _b64_to_cv2(img_b64)
     h, w = img_bgr.shape[:2]
-
-    # Full-body mask via SelfieSegmentation
     rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
-    seg_res = mp_seg.process(rgb)
-    mask_body = (seg_res.segmentation_mask > 0.5).astype(np.uint8)
 
-    # Head mask via FaceMesh (circle around forehead)
-    mask_head = np.zeros_like(mask_body, dtype=np.uint8)
+    # 1) Сглаживаем float-маску
+    seg_res = mp_seg.process(rgb)
+    prob = cv2.GaussianBlur(seg_res.segmentation_mask, (11,11), 0)
+    mask_body = (prob > 0.5).astype(np.uint8)
+
+    # 2) Морфологическое закрытие + дилатация «круглым» ядром
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (dilate_size, dilate_size))
+    mask_closed = cv2.morphologyEx(mask_body, cv2.MORPH_CLOSE, kernel)
+    mask_dilated = cv2.dilate(mask_closed, kernel, iterations=1)
+
+    # 3) Медианный фильтр
+    mask_8u = (mask_dilated * 255).astype(np.uint8)
+    mask_smooth = (cv2.medianBlur(mask_8u, 5) > 128).astype(np.uint8)
+
+    # 4) Генерируем mask_head
+    mask_head = np.zeros_like(mask_smooth, dtype=np.uint8)
     face_res = mp_face.process(rgb)
     if face_res.multi_face_landmarks:
         lm = face_res.multi_face_landmarks[0].landmark
@@ -191,21 +201,7 @@ def generate_body_mask(img_b64: str, dilate_size: int = 15) -> tuple[str, dict]:
 
     # Subtract head
     mask_final = cv2.bitwise_and(mask_body, cv2.bitwise_not(mask_head))
-
-    # Optional dilation
-    # 1) Сглаживаем float-маску
-    prob = cv2.GaussianBlur(seg_res.segmentation_mask, (11,11), 0)
-    mask_body = (prob > 0.5).astype(np.uint8)
-
-    # 2) Морфологическое закрытие + дилатация «круглым» ядром
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (dilate_size, dilate_size))
-    mask_closed = cv2.morphologyEx(mask_body, cv2.MORPH_CLOSE, kernel)
-    mask_dilated = cv2.dilate(mask_closed, kernel, iterations=1)
-
-    # 3) Медианный фильтр для финального шейпа
-    mask_8u = (mask_dilated * 255).astype(np.uint8)
-    mask_final = (cv2.medianBlur(mask_8u, 5) > 128).astype(np.uint8)
-
+    
     # Upload
     png = _cv2_to_png_bytes((mask_final * 255).astype(np.uint8))
     url = _upload_to_s3(png, source_type='bytes')
