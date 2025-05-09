@@ -179,6 +179,15 @@ def smooth_body_mask(segmentation_mask: np.ndarray,
     с плавными краями.
     """
 
+    # Проверяем параметры
+    blur_size = max(3, blur_size)
+    if blur_size % 2 == 0:  # Гауссово размытие требует нечетного ядра
+        blur_size += 1
+    
+    med_blur = max(3, med_blur)
+    if med_blur % 2 == 0:  # Медианный фильтр требует нечетного ядра
+        med_blur += 1
+
     # 1) Большой Гауссов размыв исходной вероятностной карты
     prob = cv2.GaussianBlur(segmentation_mask, (blur_size, blur_size), 0)
 
@@ -189,8 +198,12 @@ def smooth_body_mask(segmentation_mask: np.ndarray,
     mask0 = (mask0//255).astype(np.uint8)
 
     # 3) Морфологическое открытие, чтобы убрать мелкие «выступы»
+    # Проверяем, что dilate_size достаточно большой для создания ядра
+    kernel_size = max(3, dilate_size // 2)  # Гарантируем минимальный размер 3
+    if kernel_size % 2 == 0:  # Делаем размер нечетным для центральной точки ядра
+        kernel_size += 1
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE,
-                                       (dilate_size//2, dilate_size//2))
+                                      (kernel_size, kernel_size))
     mask1 = cv2.morphologyEx(mask0,
                              cv2.MORPH_OPEN,
                              kernel,
@@ -233,7 +246,11 @@ def generate_body_mask(img_b64: str, dilate_size: int = 15, full_body_dress: boo
                                med_blur=7)
 
     # 2. Отдельно «раздуваем» маску одежды, но НЕ за пределы person_mask
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (dilate_size, dilate_size))
+    # Проверяем размер ядра
+    kernel_size = max(3, dilate_size)
+    if kernel_size % 2 == 0:  # Делаем размер нечетным
+        kernel_size += 1
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
     clothing_mask = cv2.dilate(person_mask, kernel, iterations=4)
 
     # 3. Чтобы одежда не вышла за силуэт, обрезаем:
